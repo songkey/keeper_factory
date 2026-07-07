@@ -1,0 +1,15 @@
+.venv/
+.idea/
+.vscode/
+.DS_Store
+.pytest_cache/
+.cursor/
+docs/
+test/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pyw
+*.pyz
+*.pywz
