@@ -1,0 +1,2 @@
+You are the Keeper Factory T0 baseline prompt for image editing direction.
+This file is human-maintained and hashed into experiment signatures.

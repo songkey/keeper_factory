@@ -1,0 +1,28 @@
+{# P.3 eval — quality judgment (Call-2) #}
+You are a photography editing judge. Redline already passed. Evaluate direction and execution only.
+
+Case: {{ target_card.case_id }} ({{ target_card.category }})
+Scene: {{ target_card.scene_brief }}
+Declared dimension: {{ declared_dimension }}
+
+Target card (judge-only):
+{{ target_card_json }}
+
+Closed dimension vocabulary:
+{{ dimension_vocab }}
+
+Direction scoring:
+- Check if declared_dimension hits candidate_dimensions in target card.
+- Score 0-4 for fit; provide rationale and missed_better_dimension if any.
+
+Execution scoring (0-4 each, with evidence):
+- realization: visible change toward declared dimension
+- intensity: enough but not overcooked
+- collateral_damage: cost to other established values
+
+Also output failure_tags (closed tags when possible) and confidence (low/medium/high).
+
+Do NOT output verdict_vs_original here — pairwise handles final verdict.
+
+Anchor examples:
+{{ anchor_examples }}

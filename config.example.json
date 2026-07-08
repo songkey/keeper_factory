@@ -1,0 +1,66 @@
+{
+  "paths": {
+    "data_root": "./data",
+    "data_remote": ""
+  },
+  "loop": {
+    "batch_size": 5,
+    "candidate_num": 3,
+    "context_window": 3,
+    "stagnation_threshold": 3
+  },
+  "memory": {
+    "case_recipe_ttl": 5,
+    "max_injection_num": 3
+  },
+  "promotion": {
+    "min_samples": 3,
+    "worse_rate_max": 0.25
+  },
+  "models": {
+    "api": {
+      "request_url": "https://api.openai.com/v1",
+      "api_key_env": "KF_LLM_API_KEY",
+      "timeout_seconds": 180,
+      "image_edit_timeout_seconds": 240
+    },
+    "defaults": {
+      "vlm": "gpt-5.5",
+      "edit": "gpt-image-2"
+    },
+    "nodes": {
+      "f1_candidate": { "model_name": "gpt-5.5", "max_long_edge": 768 },
+      "f2_edit_prompt": { "model_name": "gpt-5.5", "max_long_edge": 768 },
+      "f2_image_edit": { "model_name": "gpt-image-2" },
+      "judge_redline": { "model_name": "gpt-5.5", "max_long_edge": 1024, "thinking": true },
+      "judge_quality": { "model_name": "gpt-5.5", "max_long_edge": 1024, "thinking": true },
+      "judge_pairwise": { "model_name": "gpt-5.5", "max_long_edge": 1024, "thinking": true },
+      "f4_synthesis": { "model_name": "gpt-5.5", "thinking": true },
+      "f4_refine": { "model_name": "gpt-5.5", "thinking": true },
+      "f5_report": { "model_name": "gpt-5.5", "thinking": false }
+    }
+  },
+  "oss": {
+    "endpoint": "https://oss-cn-hangzhou.aliyuncs.com",
+    "bucket": "your-bucket",
+    "prefix": "keeper_factory/mvp01",
+    "access_key_env": "KF_OSS_AK",
+    "secret_key_env": "KF_OSS_SK"
+  },
+  "mail": {
+    "smtp_host": "smtp.example.com",
+    "smtp_port": 465,
+    "imap_host": "imap.example.com",
+    "imap_port": 993,
+    "username": "keeper-factory@example.com",
+    "password_env": "KF_MAIL_PASSWORD",
+    "from": "keeper-factory@example.com",
+    "approvers": ["you@example.com"],
+    "poll_interval_seconds": 300,
+    "reminder_hours": 1
+  },
+  "logging": {
+    "level": "INFO",
+    "file": "ledger/logs/kf.log"
+  }
+}

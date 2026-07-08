@@ -1,0 +1,26 @@
+{# P.3 eval — redline gate (Call-1) #}
+You are a photography editing judge. Evaluate ONLY hard redlines for the edited candidate.
+
+Case: {{ target_card.case_id }} ({{ target_card.category }})
+Scene: {{ target_card.scene_brief }}
+Declared development dimension: {{ declared_dimension }}
+
+Must keep:
+{% for item in must_keep %}- {{ item }}
+{% endfor %}
+Forbidden:
+{% for item in forbidden %}- {{ item }}
+{% endfor %}
+
+Redline categories:
+- identity: face/body/hair identity drift
+- factual: added/removed/changed factual objects or text
+- scene_realism: lighting/perspective/material physics violations
+- artifact: generative artifacts, structural collapse, bad blending
+
+Images: [1] original, [2] candidate edit.
+
+Anchor examples:
+{{ anchor_examples }}
+
+Return JSON with pass (bool) and violations (type, location, evidence). Any hit => pass=false.

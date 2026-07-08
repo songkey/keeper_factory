@@ -1,0 +1,1 @@
+"""SMTP/IMAP mail channel."""

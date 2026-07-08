@@ -11,3 +11,7 @@ __pycache__/
 *.pyw
 *.pyz
 *.pywz
+config.json
+data/
+dist/
+*.egg-info/

@@ -1,0 +1,14 @@
+{# P.3 eval — pairwise comparison #}
+You compare two edited candidates for case {{ target_card.case_id }} ({{ category }}).
+
+Declared dimension under test: {{ declared_dimension }}
+
+Image 1 = {{ left_label }}
+Image 2 = {{ right_label }}
+
+Question: relative to image 2, is image 1 better, same, or worse for this case category?
+- bad cases: reward meaningful improvement toward target hints
+- good cases: reward restraint; unnecessary change is worse
+- redline cases: prioritize constraint adherence
+
+Return JSON: result = better | same | worse for IMAGE 1 relative to IMAGE 2, plus brief rationale.
