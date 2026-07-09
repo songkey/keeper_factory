@@ -8,7 +8,8 @@ from keeper_factory.config import LoadedConfig
 from keeper_factory.judge import JudgeOrchestrator
 from keeper_factory.ledger import P1VersionChain, format_loop_dir, utc_now_iso
 from keeper_factory.ledger.store import LedgerStore
-from keeper_factory.loop.checkpoint import CheckpointDriftError, CheckpointLock, CheckpointStore
+from keeper_factory.loop.artifacts import ArtifactUploader
+from keeper_factory.loop.checkpoint import CheckpointLock, CheckpointStore
 from keeper_factory.loop.stages import (
     LoopState,
     stage_batch_wait,
@@ -20,9 +21,12 @@ from keeper_factory.loop.stages import (
     stage_f4c,
     stage_f5,
 )
+from keeper_factory.loop.synthesis import SynthesisResult
+from keeper_factory.loop.validation import ValidationCampaignResult
+from keeper_factory.mail import MailChannel, find_awaiting_batch
 from keeper_factory.memory.store import MemoryStore
 from keeper_factory.models.hub import ModelHub
-from keeper_factory.schemas import KnowledgeStatus, LoopStage
+from keeper_factory.schemas import ExperimentRecord, KnowledgeStatus, LoopStage
 from keeper_factory.util.atomic_io import atomic_write_json
 from keeper_factory.util.git_ops import git_commit_all, is_git_dirty
 
@@ -46,6 +50,8 @@ class LoopRuntimeStatus:
     stage: str | None
     pending_review_count: int
     checkpoint_exists: bool
+    awaiting_approval: bool
+    pending_batch: int | None
 
 
 class LoopRuntime:
@@ -65,8 +71,15 @@ class LoopRuntime:
         self.loops_root.mkdir(parents=True, exist_ok=True)
         self.hub = ModelHub.from_loaded(loaded, dry_run=dry_run)
         self.judge = JudgeOrchestrator.from_hub(self.hub)
+        self.uploader = ArtifactUploader(loaded, enabled=not dry_run)
+        self.mail = MailChannel(loaded) if not dry_run else None
 
     def run(self, loops: int | None = None) -> list[int]:
+        if self.store.is_awaiting_approval():
+            batch = find_awaiting_batch(self.loaded.data_root)
+            raise RuntimeError(
+                f"batch {batch} is awaiting approval; run `kf approve` before starting new loops"
+            )
         target = max(1, int(loops or 1))
         if self.store.load() is not None:
             raise RuntimeError("checkpoint exists; run `kf resume` instead")
@@ -76,9 +89,13 @@ class LoopRuntime:
         try:
             start = self._next_loop_number()
             for loop_no in range(start, start + target):
+                if self.store.is_awaiting_approval():
+                    break
                 batch = self._batch_for_loop(loop_no)
                 self._run_single_loop(loop_no, batch=batch, start_stage=LoopStage.F1)
                 completed.append(loop_no)
+                if self.store.is_awaiting_approval():
+                    break
         finally:
             self.lock.release()
         return completed
@@ -114,6 +131,9 @@ class LoopRuntime:
             for item in self.memory.list_all()
             if item.status == KnowledgeStatus.PENDING_REVIEW
         )
+        awaiting = bool(runtime_state.get("awaiting_approval"))
+        pending_batch = runtime_state.get("pending_batch")
+        pending_batch_int = int(pending_batch) if isinstance(pending_batch, int) else None
 
         if checkpoint is not None:
             return LoopRuntimeStatus(
@@ -123,6 +143,8 @@ class LoopRuntime:
                 stage=checkpoint.stage.value,
                 pending_review_count=pending_review_count,
                 checkpoint_exists=True,
+                awaiting_approval=awaiting,
+                pending_batch=pending_batch_int,
             )
 
         return LoopRuntimeStatus(
@@ -132,12 +154,18 @@ class LoopRuntime:
             stage=runtime_state.get("stage") if isinstance(runtime_state.get("stage"), str) else None,
             pending_review_count=pending_review_count,
             checkpoint_exists=False,
+            awaiting_approval=awaiting,
+            pending_batch=pending_batch_int,
         )
 
     def _run_single_loop(self, loop_no: int, *, batch: int, start_stage: LoopStage) -> None:
         state = self._load_or_init_state(loop_no=loop_no, batch=batch)
         stage_index = STAGE_ORDER.index(start_stage)
         f2_outputs: list[dict[str, object]] = []
+        f3_records: list[ExperimentRecord] = []
+        validation: ValidationCampaignResult | None = None
+        synthesis: SynthesisResult | None = None
+
         for stage in STAGE_ORDER[stage_index:]:
             self.store.save(loop=loop_no, batch=batch, stage=stage)
             state.stage_history.append(stage.value)
@@ -148,6 +176,7 @@ class LoopRuntime:
                     state=state,
                     memory=self.memory,
                     p1_chain=self.p1_chain,
+                    ledger=self.ledger,
                 )
             elif stage == LoopStage.F2:
                 state, f2_outputs = stage_f2(
@@ -155,9 +184,10 @@ class LoopRuntime:
                     hub=self.hub,
                     state=state,
                     p1_chain=self.p1_chain,
+                    uploader=self.uploader,
                 )
             elif stage == LoopStage.F3:
-                state, _records = stage_f3(
+                state, f3_records = stage_f3(
                     loaded=self.loaded,
                     hub=self.hub,
                     state=state,
@@ -165,11 +195,28 @@ class LoopRuntime:
                     memory=self.memory,
                     judge=self.judge,
                     f2_outputs=f2_outputs,
+                    uploader=self.uploader,
                 )
             elif stage == LoopStage.F4A:
-                state = stage_f4a(state=state, memory=self.memory)
+                state, validation = stage_f4a(
+                    loaded=self.loaded,
+                    hub=self.hub,
+                    state=state,
+                    memory=self.memory,
+                    ledger=self.ledger,
+                    judge=self.judge,
+                    p1_chain=self.p1_chain,
+                    uploader=self.uploader,
+                    dry_run=self.dry_run,
+                )
             elif stage == LoopStage.F4B:
-                state = stage_f4b(state=state, memory=self.memory)
+                state, synthesis = stage_f4b(
+                    loaded=self.loaded,
+                    state=state,
+                    memory=self.memory,
+                    campaign=validation,
+                    dry_run=self.dry_run,
+                )
             elif stage == LoopStage.F4C:
                 state = stage_f4c(
                     loaded=self.loaded,
@@ -178,13 +225,26 @@ class LoopRuntime:
                     p1_chain=self.p1_chain,
                 )
             elif stage == LoopStage.F5:
-                state = stage_f5(loaded=self.loaded, state=state)
+                state = stage_f5(
+                    loaded=self.loaded,
+                    state=state,
+                    records=f3_records,
+                    validation=validation,
+                    synthesis=synthesis,
+                )
             elif stage == LoopStage.BATCH_WAIT:
-                state = stage_batch_wait(loaded=self.loaded, state=state, memory=self.memory)
+                state = stage_batch_wait(
+                    loaded=self.loaded,
+                    state=state,
+                    memory=self.memory,
+                    store=self.store,
+                    mail=self.mail,
+                )
             self._save_state(state)
 
+        self.hub.reset_cost()
         cost = self.hub.consume_cost()
-        if cost is not None:
+        if cost is not None and (cost.calls.vlm or cost.calls.edit):
             self.ledger.append_budget(loop=loop_no, batch=batch, cost=cost)
         self._write_loop_summary(loop_no=loop_no, batch=batch, state=state)
         self._remove_state(loop_no)
@@ -197,6 +257,7 @@ class LoopRuntime:
                 "loop": loop_no,
                 "batch": batch,
                 "dry_run": self.dry_run,
+                "main_score": state.main_score,
                 "created_at": utc_now_iso(),
             }
         )
@@ -221,7 +282,9 @@ class LoopRuntime:
         self._state_path(loop_no).unlink(missing_ok=True)
 
     def _next_loop_number(self) -> int:
-        existing = sorted(self.loops_root.glob("loop_*.json"))
+        existing = sorted(
+            p for p in self.loops_root.glob("loop_*.json") if not p.name.endswith(".runtime.json")
+        )
         if not existing:
             return 1
         latest = existing[-1].stem.replace("loop_", "")
@@ -233,4 +296,3 @@ class LoopRuntime:
     def _batch_for_loop(self, loop_no: int) -> int:
         batch_size = self.loaded.config.loop.batch_size
         return ((loop_no - 1) // batch_size) + 1
-

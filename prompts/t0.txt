@@ -1,2 +1,1 @@
-You are the Keeper Factory T0 baseline prompt for image editing direction.
-This file is human-maintained and hashed into experiment signatures.
+找到这张照片最有生活感或情绪价值的维度，将它发展成一张自然、有氛围、主体突出的生活摄影作品。成片应让人感觉「这就是一张好照片」，而非「被过度修过」——保留拍摄的真实质感，在光影、色调、氛围或瞬间感上做有意图的提升。

@@ -23,6 +23,9 @@ class P1VersionRecord(StrictModel):
     slot_diffs: list[P1SlotDiff] = Field(default_factory=list)
     rationale: str
     refine_exp_ref: str | None = None
+    constraints: str | None = None
+    capabilities: str | None = None
+    patterns: str | None = None
 
 
 class P1VersionChain:
@@ -64,11 +67,17 @@ class P1VersionChain:
         current = self.current_version()
         if current:
             return current
+        from keeper_factory.loop.p1_render import bootstrap_slots
+
+        slots = bootstrap_slots()
         record = P1VersionRecord(
             version=version,
             parent=None,
             created_loop=created_loop,
             rationale="initial P.1 bootstrap",
+            constraints=slots["constraints"],
+            capabilities=slots["capabilities"],
+            patterns=slots["patterns"],
         )
         self.write_version(record)
         self.set_current_version(version)

@@ -65,7 +65,18 @@ class CheckpointStore:
     def clear(self, *, loop: int, batch: int, stage: LoopStage) -> None:
         if self.path.exists():
             self.path.unlink(missing_ok=True)
-        self.write_runtime_state(loop=loop, batch=batch, stage=stage, running=False)
+        existing = self.read_runtime_state() or {}
+        awaiting = bool(existing.get("awaiting_approval"))
+        pending_batch = existing.get("pending_batch")
+        pending_batch_int = int(pending_batch) if isinstance(pending_batch, int) else None
+        self.write_runtime_state(
+            loop=loop,
+            batch=batch,
+            stage=stage,
+            running=False,
+            awaiting_approval=awaiting,
+            pending_batch=pending_batch_int,
+        )
 
     def assert_compatible(self, checkpoint: Checkpoint, *, force: bool = False) -> None:
         if force:
@@ -82,15 +93,46 @@ class CheckpointStore:
         batch: int,
         stage: LoopStage,
         running: bool,
+        awaiting_approval: bool = False,
+        pending_batch: int | None = None,
     ) -> None:
         payload = {
             "loop": loop,
             "batch": batch,
             "stage": stage.value,
             "running": running,
+            "awaiting_approval": awaiting_approval,
             "updated_at": utc_now_iso(),
         }
+        if pending_batch is not None:
+            payload["pending_batch"] = pending_batch
         atomic_write_json(self.runtime_state_path, payload)
+
+    def set_awaiting_approval(self, *, batch: int, loop: int) -> None:
+        payload = self.read_runtime_state() or {}
+        payload.update(
+            {
+                "loop": loop,
+                "batch": batch,
+                "stage": LoopStage.BATCH_WAIT.value,
+                "running": False,
+                "awaiting_approval": True,
+                "pending_batch": batch,
+                "updated_at": utc_now_iso(),
+            }
+        )
+        atomic_write_json(self.runtime_state_path, payload)
+
+    def clear_awaiting_approval(self) -> None:
+        payload = self.read_runtime_state() or {}
+        payload["awaiting_approval"] = False
+        payload["pending_batch"] = None
+        payload["updated_at"] = utc_now_iso()
+        atomic_write_json(self.runtime_state_path, payload)
+
+    def is_awaiting_approval(self) -> bool:
+        payload = self.read_runtime_state() or {}
+        return bool(payload.get("awaiting_approval"))
 
     def read_runtime_state(self) -> dict[str, object] | None:
         if not self.runtime_state_path.is_file():

@@ -1,0 +1,29 @@
+You are preparing a draft Target Card for an image-editing evaluation set.
+
+Goal:
+- Propose draft judging metadata for the given image.
+- Keep it conservative and realistic.
+- Use Chinese.
+
+Allowed dimension vocabulary (must choose from these keys):
+{% for item in dimension_vocab %}
+- {{ item }}
+{% endfor %}
+
+Rules:
+- candidate_dimensions: 1 to 3 items.
+- hint should be short and concrete.
+- must_keep and forbidden should be specific and review-friendly.
+- category_note should be:
+  - bad: explain what is currently problematic
+  - good: explain what is already good and should be preserved
+  - redline: explain the redline trap to test
+
+Output JSON fields:
+- candidate_dimensions: [{dimension: string, hint: string}]
+- must_keep: [string]
+- forbidden: [string]
+- category_note: string
+
+Image category:
+- {{ category }}

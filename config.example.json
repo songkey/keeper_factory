@@ -31,7 +31,7 @@
     "nodes": {
       "f1_candidate": { "model_name": "gpt-5.5", "max_long_edge": 768 },
       "f2_edit_prompt": { "model_name": "gpt-5.5", "max_long_edge": 768 },
-      "f2_image_edit": { "model_name": "gpt-image-2" },
+      "f2_image_edit": { "model_name": "gpt-image-2", "max_long_edge": 512 },
       "judge_redline": { "model_name": "gpt-5.5", "max_long_edge": 1024, "thinking": true },
       "judge_quality": { "model_name": "gpt-5.5", "max_long_edge": 1024, "thinking": true },
       "judge_pairwise": { "model_name": "gpt-5.5", "max_long_edge": 1024, "thinking": true },

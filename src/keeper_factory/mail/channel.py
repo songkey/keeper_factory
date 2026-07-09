@@ -1,0 +1,96 @@
+from __future__ import annotations
+
+import json
+import logging
+import smtplib
+import ssl
+from email.message import EmailMessage
+from pathlib import Path
+
+from keeper_factory.config import LoadedConfig
+
+logger = logging.getLogger(__name__)
+
+_PLACEHOLDER_SMTP_HOSTS = frozenset(
+    {
+        "",
+        "smtp.example.com",
+        "example.com",
+        "localhost",
+    }
+)
+
+
+class MailChannel:
+    def __init__(self, loaded: LoadedConfig) -> None:
+        self.loaded = loaded
+        self.cfg = loaded.config.mail
+
+    @property
+    def enabled(self) -> bool:
+        return loaded_has_mail_secrets(self.loaded)
+
+    def send_text(
+        self,
+        *,
+        subject: str,
+        body: str,
+        to_addrs: list[str] | None = None,
+    ) -> bool:
+        """Best-effort send. Never raises — mail must not block the loop."""
+        if not self.enabled or self.loaded.secrets is None:
+            return False
+        recipients = to_addrs or list(self.cfg.approvers)
+        if not recipients:
+            return False
+
+        message = EmailMessage()
+        message["Subject"] = subject
+        message["From"] = self.cfg.from_
+        message["To"] = ", ".join(recipients)
+        message.set_content(body)
+
+        try:
+            context = ssl.create_default_context()
+            with smtplib.SMTP_SSL(
+                self.cfg.smtp_host,
+                self.cfg.smtp_port,
+                context=context,
+                timeout=30,
+            ) as client:
+                client.login(self.cfg.username, self.loaded.secrets.mail_password)
+                client.send_message(message)
+            return True
+        except Exception as exc:  # noqa: BLE001 — mail is optional transport
+            logger.warning("mail send failed (%s): %s", self.cfg.smtp_host, exc)
+            return False
+
+
+def loaded_has_mail_secrets(loaded: LoadedConfig) -> bool:
+    if loaded.secrets is None:
+        return False
+    host = (loaded.config.mail.smtp_host or "").strip().lower()
+    if host in _PLACEHOLDER_SMTP_HOSTS or host.endswith(".example.com"):
+        return False
+    return bool(loaded.secrets.mail_password and host)
+
+
+def write_batch_pending_file(
+    data_root: Path,
+    *,
+    batch: int,
+    loop_end: int,
+    pending_items: list[dict[str, str]],
+) -> Path:
+    batches_dir = data_root / "ledger" / "batches"
+    batches_dir.mkdir(parents=True, exist_ok=True)
+    path = batches_dir / f"batch_{batch:03d}.json"
+    payload = {
+        "batch": batch,
+        "loop_end": loop_end,
+        "pending_items": pending_items,
+        "decisions": [],
+        "awaiting_approval": True,
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path

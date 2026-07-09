@@ -99,18 +99,23 @@ class ModelHub:
 
     def _api_common_kwargs(self, resolved: ResolvedNode) -> dict[str, Any]:
         api = self.loaded.config.models.api
-        opts = resolved.options
         kwargs: dict[str, Any] = {
             "api_key": self.loaded.secrets.api_key if self.loaded.secrets else "",
             "request_url": api.request_url,
             "model_name": resolved.model_name,
             "timeout_seconds": api.timeout_seconds,
-            "thinking_enabled": bool(opts.thinking),
-            "reasoning_effort": opts.reasoning_effort,
-            "max_tokens": opts.max_tokens,
         }
         if resolved.api_kind == "edit":
             kwargs["timeout_seconds"] = api.image_edit_timeout_seconds
+            return kwargs
+        opts = resolved.options
+        kwargs.update(
+            {
+                "thinking_enabled": bool(opts.thinking),
+                "reasoning_effort": opts.reasoning_effort,
+                "max_tokens": opts.max_tokens,
+            }
+        )
         return kwargs
 
     def _get_llm(self, resolved: ResolvedNode) -> LLMAPI:
@@ -128,7 +133,11 @@ class ModelHub:
     def _get_edit(self, resolved: ResolvedNode) -> ImageEditAPI:
         key = resolved.model_name
         if key not in self._edit_clients:
-            self._edit_clients[key] = ImageEditAPI(**self._api_common_kwargs(resolved))
+            client = ImageEditAPI(**self._api_common_kwargs(resolved))
+            max_long_edge = resolved.options.max_long_edge or 512
+            client.image_edit_max_long_edge = max(16, int(max_long_edge))
+            client.image_edit_max_pixels = client.image_edit_max_long_edge * client.image_edit_max_long_edge
+            self._edit_clients[key] = client
         return self._edit_clients[key]
 
     @staticmethod
@@ -322,3 +331,7 @@ class ModelHub:
         if self.token_tracker is None:
             return None
         return self.token_tracker.to_experiment_cost()
+
+    def reset_cost(self) -> None:
+        if self.token_tracker is not None:
+            self.token_tracker.reset()

@@ -14,7 +14,7 @@ from keeper_factory.models.generate_json import (
     schema_prompt_appendix,
 )
 from keeper_factory.models.hub import ModelHub
-from keeper_factory.models.llm_api import LLMApiError, is_transient_llm_error
+from keeper_factory.models.llm_api import ImageEditAPI, LLMApiError, is_transient_llm_error
 from keeper_factory.models.token_tracker import TokenTracker
 from keeper_factory.oss import OssClient
 
@@ -130,6 +130,40 @@ def test_model_hub_resolve_node_defaults(loaded_config) -> None:
     resolved = hub.resolve_node("f2_image_edit")
     assert resolved.model_name == "gpt-image-2"
     assert resolved.api_kind == "edit"
+
+
+def test_model_hub_edit_client_ignores_thinking_kwargs(loaded_config) -> None:
+    hub = ModelHub.from_loaded(loaded_config)
+    resolved = hub.resolve_node("f2_image_edit")
+    client = hub._get_edit(resolved)
+    assert isinstance(client, ImageEditAPI)
+    assert client.image_edit_max_long_edge == 512
+    assert client.image_edit_max_pixels == 512 * 512
+
+
+def test_image_edit_upload_dimensions_cap_at_512() -> None:
+    from keeper_factory.models.llm_api import (
+        MIN_PIXELS,
+        _image_edit_output_size,
+        _image_edit_upload_dimensions,
+    )
+
+    w, h = _image_edit_upload_dimensions(2048, 1536, max_long_edge=512, max_pixels=512 * 512)
+    assert max(w, h) <= 512
+    assert w * h <= 512 * 512
+    assert w % 16 == 0 and h % 16 == 0
+
+    out_w, out_h = _image_edit_output_size(2048, 1536)
+    assert out_w * out_h >= MIN_PIXELS
+    assert max(out_w, out_h) >= 1024
+    assert out_w % 16 == 0 and out_h % 16 == 0
+
+    # Regression: small/square sources must not collapse to invalid 800x800.
+    for src in ((512, 512), (800, 800), (640, 480), (2048, 2048)):
+        ow, oh = _image_edit_output_size(*src)
+        assert ow * oh >= MIN_PIXELS, (src, ow, oh)
+        assert ow % 16 == 0 and oh % 16 == 0
+        assert f"{ow}x{oh}" != "800x800"
 
 
 def test_oss_client_builds_public_url(loaded_config) -> None:

@@ -279,19 +279,83 @@ def _image_edit_upload_dimensions(
     max_long_edge: int,
     max_pixels: int,
 ) -> tuple[int, int]:
-    max_long = max(512, int(max_long_edge))
+    """Fit *input* image uploads within max_long_edge / max_pixels (no MIN_PIXELS upscale)."""
+    max_long = max(16, int(max_long_edge))
+    pixel_limit = max(16 * 16, int(max_pixels))
     w, h = float(src_w), float(src_h)
     long_edge = max(w, h)
     if long_edge > max_long:
         scale = max_long / long_edge
         w *= scale
         h *= scale
-    return _api_dimensions(
-        max(1, int(round(w))),
-        max(1, int(round(h))),
-        max_edge=max_long,
-        max_pixels=max_pixels,
-    )
+    wi = max(16, int(round(w)) // 16 * 16)
+    hi = max(16, int(round(h)) // 16 * 16)
+    area = wi * hi
+    if area > pixel_limit:
+        scale = (pixel_limit / area) ** 0.5
+        wi = max(16, int(round(wi * scale)) // 16 * 16)
+        hi = max(16, int(round(hi * scale)) // 16 * 16)
+        long_e = max(wi, hi)
+        if long_e > max_long:
+            scale = max_long / long_e
+            wi = max(16, int(round(wi * scale)) // 16 * 16)
+            hi = max(16, int(round(hi * scale)) // 16 * 16)
+    return wi, hi
+
+
+def _ceil_to_multiple(value: float, multiple: int = 16) -> int:
+    value = max(float(multiple), float(value))
+    return int((value + multiple - 1) // multiple * multiple)
+
+
+def _image_edit_output_size(
+    src_w: int,
+    src_h: int,
+    *,
+    max_long_edge: int | None = None,
+) -> tuple[int, int]:
+    """Choose a gpt-image-2-legal *output* size (min pixels / edge / ratio constraints).
+
+    Note: ``_api_dimensions`` can land on 800x800 when upscaling from ~512 due to
+    truncating to multiples of 16 (800*800 < MIN_PIXELS). Always ceil past the budget.
+    """
+    edge_cap = MAX_EDGE if max_long_edge is None else max(int(max_long_edge), 1024)
+    edge_cap = min(MAX_EDGE, max(1024, edge_cap))
+
+    w = max(1.0, float(src_w))
+    h = max(1.0, float(src_h))
+    # Ensure we start large enough that after 16-alignment we still meet MIN_PIXELS.
+    # 1024x1024 is the safest common preset above the 655_360 budget.
+    long_e = max(w, h)
+    short_e = min(w, h)
+    if long_e * short_e < MIN_PIXELS or long_e < 1024:
+        scale = max(1024 / long_e, (MIN_PIXELS / (w * h)) ** 0.5)
+        w *= scale
+        h *= scale
+
+    wi = min(edge_cap, _ceil_to_multiple(w))
+    hi = min(edge_cap, _ceil_to_multiple(h))
+    # Preserve aspect if one edge hit the cap.
+    if max(wi, hi) == edge_cap and min(w, h) > 0:
+        if w >= h:
+            hi = max(16, _ceil_to_multiple(edge_cap * (h / w)))
+            wi = edge_cap // 16 * 16
+        else:
+            wi = max(16, _ceil_to_multiple(edge_cap * (w / h)))
+            hi = edge_cap // 16 * 16
+
+    # Final safety: bump the short edge until pixel budget is met.
+    while wi * hi < MIN_PIXELS:
+        if wi <= hi:
+            wi = min(edge_cap, wi + 16)
+        else:
+            hi = min(edge_cap, hi + 16)
+        if wi >= edge_cap and hi >= edge_cap:
+            break
+    if wi * hi < MIN_PIXELS:
+        # Last resort: square 1024.
+        wi = hi = 1024
+    return wi, hi
 
 
 def _fit_output_to_target_canvas(edited: Image.Image, target_w: int, target_h: int) -> Image.Image:
@@ -505,7 +569,7 @@ def _resolve_image_edit_int_setting(
 
 def _resolve_image_edit_max_long_edge(settings: dict[str, Any] | None) -> int:
     return _resolve_image_edit_int_setting(
-        settings, "image_edit_max_long_edge", default=4096, minimum=512
+        settings, "image_edit_max_long_edge", default=512, minimum=16
     )
 
 
@@ -521,11 +585,11 @@ def _resolve_image_edit_upload_jpeg_quality(settings: dict[str, Any] | None) -> 
 def _resolve_image_edit_max_pixels(settings: dict[str, Any] | None, *, max_long_edge: int) -> int:
     if isinstance(settings, dict) and settings.get("image_edit_max_pixels") is not None:
         try:
-            return max(MIN_PIXELS, int(settings["image_edit_max_pixels"]))
+            return max(16 * 16, int(settings["image_edit_max_pixels"]))
         except (TypeError, ValueError):
             pass
-    max_long = max(512, int(max_long_edge))
-    return max(MAX_PIXELS, max_long * max_long)
+    max_long = max(16, int(max_long_edge))
+    return max_long * max_long
 
 
 def _transient_retry_delay(attempt: int) -> None:
@@ -967,13 +1031,15 @@ class ImageEditAPI(_BaseAPI):
         self._reset_token_usage()
         source_pil = ImageOps.exif_transpose(self._ensure_pil_image(image, name="image")).convert("RGB")
         src_w, src_h = source_pil.size
-        api_w, api_h = _image_edit_upload_dimensions(
+        # Input upload can be small (e.g. 512 long edge). Output size must meet API min pixels.
+        upload_w, upload_h = _image_edit_upload_dimensions(
             src_w,
             src_h,
             max_long_edge=self.image_edit_max_long_edge,
             max_pixels=self.image_edit_max_pixels,
         )
-        upload_pil = source_pil.resize((api_w, api_h), Image.Resampling.LANCZOS)
+        out_w, out_h = _image_edit_output_size(src_w, src_h)
+        upload_pil = source_pil.resize((upload_w, upload_h), Image.Resampling.LANCZOS)
         upload_buf = io.BytesIO()
         upload_pil.save(upload_buf, format="JPEG", quality=self.image_edit_upload_jpeg_quality)
         image_bytes = upload_buf.getvalue()
@@ -985,13 +1051,13 @@ class ImageEditAPI(_BaseAPI):
                 prompt=prompt.strip(),
                 image_bytes=image_bytes,
             )
-            return _fit_output_to_target_canvas(edited, api_w, api_h)
+            return _fit_output_to_target_canvas(edited, out_w, out_h)
 
         kwargs: dict[str, Any] = {
             "model": target_model,
             "image": ("input.jpg", image_bytes, "image/jpeg"),
             "prompt": prompt.strip(),
-            "size": f"{api_w}x{api_h}",
+            "size": f"{out_w}x{out_h}",
             "n": 1,
             "output_format": self.output_format,
         }
@@ -1001,8 +1067,8 @@ class ImageEditAPI(_BaseAPI):
             kwargs["quality"] = self.quality
         if mask is not None:
             mask_pil = ImageOps.exif_transpose(self._ensure_pil_image(mask, name="mask"))
-            if mask_pil.size != (api_w, api_h):
-                mask_pil = mask_pil.resize((api_w, api_h), Image.Resampling.LANCZOS)
+            if mask_pil.size != (upload_w, upload_h):
+                mask_pil = mask_pil.resize((upload_w, upload_h), Image.Resampling.LANCZOS)
             if mask_pil.mode not in {"L", "RGBA"}:
                 mask_pil = mask_pil.convert("L")
             mask_buf = io.BytesIO()
@@ -1017,7 +1083,7 @@ class ImageEditAPI(_BaseAPI):
                 result = client.images.edit(**kwargs)
                 self._capture_token_usage(result)
                 edited = self._extract_image_pil_from_result(result)
-                return _fit_output_to_target_canvas(edited, api_w, api_h)
+                return _fit_output_to_target_canvas(edited, out_w, out_h)
             except (APIStatusError, APIConnectionError, APITimeoutError, LLMApiError) as exc:
                 last_exc = exc
                 if attempt < max_attempts - 1 and is_transient_llm_error(exc):

@@ -9,6 +9,14 @@ from keeper_factory import __version__
 from keeper_factory.config import find_project_root, load_config
 from keeper_factory.init_data import init_from_loaded, seed_demo_from_loaded
 from keeper_factory.loop import CheckpointDriftError, LoopRuntime
+from keeper_factory.mail import (
+    apply_approvals,
+    clear_batch_approval,
+    find_awaiting_batch,
+    parse_approval_text,
+    parse_approval_with_batch,
+)
+from keeper_factory.memory import MemoryStore
 
 app = typer.Typer(
     name="kf",
@@ -147,16 +155,70 @@ def status(
     typer.echo(f"batch: {snapshot.batch}")
     typer.echo(f"stage: {snapshot.stage}")
     typer.echo(f"pending_review: {snapshot.pending_review_count}")
+    typer.echo(f"awaiting_approval: {snapshot.awaiting_approval}")
+    typer.echo(f"pending_batch: {snapshot.pending_batch}")
     typer.echo(f"checkpoint_exists: {snapshot.checkpoint_exists}")
 
 
 @app.command()
 def approve(
     config: Path = typer.Option(Path("config.json"), "--config", "-c"),
+    batch: int | None = typer.Option(None, "--batch", help="Batch number to approve"),
+    file: Path | None = typer.Option(None, "--file", "-f", help="Approval instructions file"),
+    text: str | None = typer.Option(None, "--text", help="Inline approval instructions"),
 ) -> None:
-    """Local approval fallback when mail is unavailable (not yet implemented)."""
-    typer.echo("kf approve is not implemented yet.")
-    raise typer.Exit(code=1)
+    """Apply batch approval decisions (local fallback for mail channel)."""
+    root = find_project_root()
+    config_path = config if config.is_absolute() else root / config
+    loaded = load_config(config_path, project_root=root)
+    data_root = loaded.data_root
+
+    pending_batch = batch or find_awaiting_batch(data_root)
+    if pending_batch is None:
+        typer.echo("No batch awaiting approval.")
+        raise typer.Exit(code=1)
+
+    batch_path = data_root / "ledger" / "batches" / f"batch_{pending_batch:03d}.json"
+    if not batch_path.is_file():
+        typer.echo(f"Batch file not found: {batch_path}")
+        raise typer.Exit(code=1)
+
+    if file is not None:
+        approval_text = file.read_text(encoding="utf-8")
+    elif text:
+        approval_text = text
+    else:
+        typer.echo("Provide --file or --text with approval lines.")
+        raise typer.Exit(code=1)
+
+    memory = MemoryStore(data_root)
+    approvals = parse_approval_with_batch(approval_text, batch_path=batch_path)
+    if not approvals:
+        approvals = parse_approval_text(approval_text)
+    if not approvals and "all ok" in approval_text.lower():
+        from keeper_factory.mail.approval import ApprovalLine
+        from keeper_factory.memory.promotion import PromotionDecision
+        from keeper_factory.schemas import KnowledgeStatus
+
+        approvals = [
+            ApprovalLine(knowledge_id=doc.id, decision=PromotionDecision.APPROVE)
+            for doc in memory.list_all()
+            if doc.status == KnowledgeStatus.PENDING_REVIEW
+        ]
+    if not approvals:
+        typer.echo("No valid approval lines parsed.")
+        raise typer.Exit(code=1)
+
+    runtime = LoopRuntime(loaded, dry_run=True)
+    state = runtime.store.read_runtime_state() or {}
+    loop_no = int(state.get("loop") or 0)
+    applied = apply_approvals(memory=memory, approvals=approvals, loop=loop_no)
+    clear_batch_approval(data_root, batch=pending_batch)
+    runtime.store.clear_awaiting_approval()
+
+    for line in applied:
+        typer.echo(line)
+    typer.echo(f"Batch {pending_batch} approval complete.")
 
 
 if __name__ == "__main__":
