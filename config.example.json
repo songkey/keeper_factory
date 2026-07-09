@@ -41,7 +41,7 @@
     }
   },
   "oss": {
-    "endpoint": "https://oss-cn-hangzhou.aliyuncs.com",
+    "endpoint": "https://oss-cn-beijing.aliyuncs.com",
     "bucket": "your-bucket",
     "prefix": "keeper_factory/mvp01",
     "access_key_env": "KF_OSS_AK",
