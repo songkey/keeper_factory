@@ -160,6 +160,46 @@ def status(
     typer.echo(f"checkpoint_exists: {snapshot.checkpoint_exists}")
 
 
+@app.command("mail-test")
+def mail_test(
+    config: Path = typer.Option(Path("config.json"), "--config", "-c"),
+) -> None:
+    """Send a one-off SMTP probe to verify mail configuration."""
+    import os
+    import socket
+
+    from keeper_factory.mail import MailChannel, loaded_has_mail_secrets
+
+    root = find_project_root()
+    config_path = config if config.is_absolute() else root / config
+    loaded = load_config(config_path, project_root=root)
+    cfg = loaded.config.mail
+    env_name = cfg.password_env
+    typer.echo(f"smtp_host: {cfg.smtp_host}:{cfg.smtp_port}")
+    typer.echo(f"username: {cfg.username}")
+    typer.echo(f"from: {cfg.from_}")
+    typer.echo(f"approvers: {', '.join(cfg.approvers)}")
+    typer.echo(f"password_env: {env_name} present={bool(os.environ.get(env_name))}")
+    typer.echo(f"enabled: {loaded_has_mail_secrets(loaded)}")
+    try:
+        infos = socket.getaddrinfo(cfg.smtp_host, cfg.smtp_port)
+        typer.echo(f"dns: ok -> {infos[0][4][0]}")
+    except OSError as exc:
+        typer.echo(f"dns: FAILED ({exc})")
+        typer.echo("Fix local DNS / network first; password is not the issue.")
+        raise typer.Exit(code=1) from exc
+
+    channel = MailChannel(loaded)
+    result = channel.send_text_detailed(
+        subject="[KF][test] mail probe",
+        body="Keeper Factory SMTP probe.\nIf you received this, mail config works.\n",
+    )
+    typer.echo(result.as_summary())
+    if not result.ok:
+        raise typer.Exit(code=1)
+    typer.echo("Mail probe sent.")
+
+
 @app.command()
 def approve(
     config: Path = typer.Option(Path("config.json"), "--config", "-c"),

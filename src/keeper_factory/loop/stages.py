@@ -695,6 +695,7 @@ def stage_f5(
     records: list[ExperimentRecord],
     validation: ValidationCampaignResult | None,
     synthesis: SynthesisResult | None,
+    mail: MailChannel | None = None,
 ) -> LoopState:
     report_dir = loaded.data_root / "ledger" / "reports"
     report_dir.mkdir(parents=True, exist_ok=True)
@@ -713,6 +714,16 @@ def stage_f5(
     state.summary_lines = short_summary
     if main_score is not None:
         state.main_score = main_score
+
+    # Informational loop report (non-blocking).
+    if mail is not None and mail.enabled:
+        result = mail.send_text_detailed(
+            subject=f"[KF][loop {state.loop:03d}] Report",
+            body=body,
+        )
+        state.summary_lines.append(result.as_summary())
+    elif mail is not None:
+        state.summary_lines.append("mail_sent=False reason=disabled")
     return state
 
 
@@ -766,12 +777,14 @@ def stage_batch_wait(
         "Use `kf approve` locally if mail is unavailable.\n"
     )
     if mail is not None and mail.enabled:
-        sent = mail.send_text(
+        result = mail.send_text_detailed(
             subject=f"[KF][batch {state.batch:03d}] pending approval",
             body=body,
         )
-        state.summary_lines.append(f"mail_sent={sent}")
+        state.summary_lines.append(result.as_summary())
+    elif mail is not None:
+        state.summary_lines.append("mail_sent=False reason=disabled")
     else:
-        state.summary_lines.append("mail_sent=False")
+        state.summary_lines.append("mail_sent=False reason=no_mail_channel")
     state.summary_lines.append(f"batch_pending={batch_path.name}")
     return state

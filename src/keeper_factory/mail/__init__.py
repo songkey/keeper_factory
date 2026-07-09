@@ -8,10 +8,16 @@ from keeper_factory.mail.approval import (
     parse_approval_text,
     parse_approval_with_batch,
 )
-from keeper_factory.mail.channel import MailChannel, loaded_has_mail_secrets, write_batch_pending_file
+from keeper_factory.mail.channel import (
+    MailChannel,
+    MailSendResult,
+    loaded_has_mail_secrets,
+    write_batch_pending_file,
+)
 
 __all__ = [
     "MailChannel",
+    "MailSendResult",
     "apply_approvals",
     "clear_batch_approval",
     "count_pending_review",

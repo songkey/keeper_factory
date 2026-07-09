@@ -231,6 +231,7 @@ class LoopRuntime:
                     records=f3_records,
                     validation=validation,
                     synthesis=synthesis,
+                    mail=self.mail,
                 )
             elif stage == LoopStage.BATCH_WAIT:
                 state = stage_batch_wait(

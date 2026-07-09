@@ -42,7 +42,7 @@
   },
   "oss": {
     "endpoint": "https://oss-cn-beijing.aliyuncs.com",
-    "bucket": "your-bucket",
+    "bucket": "st-cv",
     "prefix": "keeper_factory/mvp01",
     "access_key_env": "KF_OSS_AK",
     "secret_key_env": "KF_OSS_SK"

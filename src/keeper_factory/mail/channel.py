@@ -4,6 +4,7 @@ import json
 import logging
 import smtplib
 import ssl
+from dataclasses import dataclass
 from email.message import EmailMessage
 from pathlib import Path
 
@@ -21,10 +22,25 @@ _PLACEHOLDER_SMTP_HOSTS = frozenset(
 )
 
 
+@dataclass(frozen=True)
+class MailSendResult:
+    ok: bool
+    skipped: bool = False
+    error: str | None = None
+
+    def as_summary(self) -> str:
+        if self.ok:
+            return "mail_sent=True"
+        if self.skipped:
+            return f"mail_sent=False reason=skipped:{self.error or 'disabled'}"
+        return f"mail_sent=False reason={self.error or 'unknown'}"
+
+
 class MailChannel:
     def __init__(self, loaded: LoadedConfig) -> None:
         self.loaded = loaded
         self.cfg = loaded.config.mail
+        self.last_result: MailSendResult | None = None
 
     @property
     def enabled(self) -> bool:
@@ -37,12 +53,26 @@ class MailChannel:
         body: str,
         to_addrs: list[str] | None = None,
     ) -> bool:
+        result = self.send_text_detailed(subject=subject, body=body, to_addrs=to_addrs)
+        return result.ok
+
+    def send_text_detailed(
+        self,
+        *,
+        subject: str,
+        body: str,
+        to_addrs: list[str] | None = None,
+    ) -> MailSendResult:
         """Best-effort send. Never raises — mail must not block the loop."""
         if not self.enabled or self.loaded.secrets is None:
-            return False
+            result = MailSendResult(ok=False, skipped=True, error="mail_disabled_or_placeholder_host")
+            self.last_result = result
+            return result
         recipients = to_addrs or list(self.cfg.approvers)
         if not recipients:
-            return False
+            result = MailSendResult(ok=False, skipped=True, error="no_recipients")
+            self.last_result = result
+            return result
 
         message = EmailMessage()
         message["Subject"] = subject
@@ -60,10 +90,17 @@ class MailChannel:
             ) as client:
                 client.login(self.cfg.username, self.loaded.secrets.mail_password)
                 client.send_message(message)
-            return True
+            result = MailSendResult(ok=True)
+            self.last_result = result
+            return result
         except Exception as exc:  # noqa: BLE001 — mail is optional transport
-            logger.warning("mail send failed (%s): %s", self.cfg.smtp_host, exc)
-            return False
+            err = f"{type(exc).__name__}: {exc}"
+            logger.warning("mail send failed (%s): %s", self.cfg.smtp_host, err)
+            # Also print so CLI users see it without digging into log files.
+            print(f"[kf mail] send failed via {self.cfg.smtp_host}: {err}", flush=True)
+            result = MailSendResult(ok=False, skipped=False, error=err)
+            self.last_result = result
+            return result
 
 
 def loaded_has_mail_secrets(loaded: LoadedConfig) -> bool:
