@@ -232,6 +232,7 @@ class LoopRuntime:
                     validation=validation,
                     synthesis=synthesis,
                     ledger=self.ledger,
+                    memory=self.memory,
                     uploader=self.uploader,
                     mail=self.mail,
                 )

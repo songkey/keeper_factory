@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -143,6 +144,16 @@ def test_publish_file_keeps_local_when_pending(tmp_path: Path) -> None:
 
 
 def test_build_loop_report_chinese_layout(tmp_path: Path) -> None:
+    from keeper_factory.schemas import (
+        Confidence,
+        KnowledgeDocument,
+        KnowledgeScope,
+        KnowledgeStatus,
+        KnowledgeType,
+        ValidationState,
+    )
+    from keeper_factory.loop.validation import ValidationCampaignResult, ValidationOutcome
+
     case_dir = tmp_path / "goldenset" / "case_001"
     case_dir.mkdir(parents=True)
     dump_yaml_dict(
@@ -159,6 +170,40 @@ def test_build_loop_report_chinese_layout(tmp_path: Path) -> None:
     )
     Image.fromarray(np.zeros((8, 8, 3), dtype=np.uint8), mode="RGB").save(
         case_dir / "original.png"
+    )
+
+    exp_dir = tmp_path / "ledger" / "experiments" / "loop_001"
+    exp_dir.mkdir(parents=True)
+    (exp_dir / "loop001_main_c1_edit_prompt.txt").write_text(
+        "FULL_EDIT_PROMPT_BODY\nline2\n", encoding="utf-8"
+    )
+    (exp_dir / "loop001_main_c1_judge.json").write_text(
+        json.dumps({"verdict_vs_original": "better", "score": 3}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (exp_dir / "loop001_val_s1_edit_prompt.txt").write_text(
+        "VAL_PROMPT_BODY\n", encoding="utf-8"
+    )
+    (exp_dir / "loop001_val_s1_judge.json").write_text(
+        json.dumps({"verdict_vs_original": "same"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    recipe = KnowledgeDocument(
+        id="cr_0001",
+        type=KnowledgeType.CASE_RECIPE,
+        status=KnowledgeStatus.CANDIDATE,
+        created_loop=1,
+        updated_loop=1,
+        scope=KnowledgeScope(dimensions=["light_shadow"], categories=[], image_class="室内"),
+        confidence=Confidence.LOW,
+        evidence=["loop001_main_c1"],
+        case_id="case_001",
+        declared_dimension="light_shadow",
+        strategy_summary="提亮主体并冻结身份",
+        p1_variant_ref="p1_v001",
+        validation_state=ValidationState.PENDING,
+        ttl_loops=5,
     )
 
     state = SimpleNamespace(
@@ -186,29 +231,85 @@ def test_build_loop_report_chinese_layout(tmp_path: Path) -> None:
         result="https://oss.example.com/result.png",
         prompt="https://oss.example.com/prompt.txt",
     )
+    val_record = ExperimentRecord(
+        exp_id="loop001_val_s1",
+        exp_sig="sigv",
+        loop=1,
+        batch=1,
+        kind=ExperimentKind.VALIDATION,
+        case_id="case_001",
+        strategy=StrategyInfo(
+            p1_version="p1_v001",
+            candidate_index=1,
+            declared_dimension="light_shadow",
+            strategy_digest="abcd",
+            injected_knowledge=[],
+            validates_recipe="cr_0001",
+        ),
+        env=record.env,
+        artifacts=Artifacts(
+            original_image_url="https://oss.example.com/val_original.png",
+            edit_prompt_url="https://oss.example.com/val_prompt.txt",
+            result_image_url="https://oss.example.com/val_result.png",
+            result_image_sha256="1" * 64,
+            upload_pending=False,
+        ),
+        judge_summary=JudgeSummary(
+            redline_pass=True,
+            verdict_vs_original=Verdict.SAME,
+            direction_score=2,
+            execution_scores=ExecutionScores(
+                realization=2, intensity=2, collateral_damage=3
+            ),
+            failure_tags=[],
+        ),
+        judge_result_url="https://oss.example.com/val_judge.json",
+        status=ExperimentStatus.COMPLETED,
+        created_at="2026-01-01T00:00:00Z",
+    )
+    validation = ValidationCampaignResult(
+        recipe_id="cr_0001",
+        outcomes=[
+            ValidationOutcome(
+                case_id="case_001",
+                exp_id="loop001_val_s1",
+                score=0,
+                verdict=Verdict.SAME,
+                redline_pass=True,
+                original_image_url="https://oss.example.com/val_original.png",
+                result_image_url="https://oss.example.com/val_result.png",
+            )
+        ],
+        total_score=0,
+        worse_count=0,
+    )
     body, short, score = build_loop_report(
         state=state,
         records=[record],
-        validation=None,
+        validation=validation,
         synthesis=None,
         loops_root=tmp_path,
         stagnation_threshold=3,
         t0_text="把照片发展成有生活感的作品。",
         data_root=tmp_path,
+        validation_records=[val_record],
+        top_recipe=recipe,
     )
     assert body.startswith("# 第 1 轮报告\n\n## T0 目标\n")
     assert "把照片发展成有生活感的作品。" in body
-    assert "## 本轮使用的数据集样本" in body
-    assert "`case_001`" in body
-    assert "室内走廊人像" in body
-    assert "| 字段 | 内容 |" in body
-    assert "| 原图 | 结果图 |" in body
+    assert "提亮主体并冻结身份" in body
+    assert "| 序号 | 阶段 | 说明 |" in body
+    assert "| 1 | F.1 |" in body
+    assert "FULL_EDIT_PROMPT_BODY" in body
+    assert '"verdict_vs_original": "better"' in body
+    assert "#### 编辑提示词（完整）" in body
+    assert "#### 裁判 JSON（完整）" in body
+    assert "VAL_PROMPT_BODY" in body
     assert (
-        "| ![loop001_main_c1 原图](https://oss.example.com/original.png) "
-        "| ![loop001_main_c1 结果图](https://oss.example.com/result.png) |"
+        "| ![loop001_val_s1 原图](https://oss.example.com/val_original.png) "
+        "| ![loop001_val_s1 结果图](https://oss.example.com/val_result.png) |"
     ) in body
-    assert "lift subject, freeze identity" in body
-    assert "实验详情（完整输入/输出）" in body
+    assert "| 原图 | 结果图 |" in body
     assert short[0] == "case=case_001"
     assert score == 1  # bad + better
 

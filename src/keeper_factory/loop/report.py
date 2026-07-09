@@ -3,13 +3,14 @@ from __future__ import annotations
 import html
 import json
 import re
+import urllib.error
+import urllib.request
 from pathlib import Path
-
 from keeper_factory.goldenset import load_target_card
 from keeper_factory.loop.synthesis import SynthesisResult
 from keeper_factory.loop.validation import ValidationCampaignResult
-from keeper_factory.schemas import ExperimentRecord, TargetCard
-
+from keeper_factory.schemas import ExperimentRecord, KnowledgeDocument, TargetCard
+from keeper_factory.schemas.enums import KnowledgeStatus, ValidationState
 
 _CATEGORY_ZH = {
     "bad": "差样本",
@@ -61,16 +62,132 @@ def _md_image(alt: str, url: str | None) -> str:
     return f"![{alt}]({url})"
 
 
-def _kv_table(rows: list[tuple[str, str]]) -> list[str]:
+def _kv_table(rows: list[tuple[str, str]], *, headers: tuple[str, str] = ("字段", "内容")) -> list[str]:
     """Render key/value pairs as a two-column markdown table."""
     if not rows:
-        return ["| 字段 | 内容 |", "| --- | --- |", "| （无） | （无） |", ""]
-    lines = ["| 字段 | 内容 |", "| --- | --- |"]
+        return [f"| {headers[0]} | {headers[1]} |", "| --- | --- |", "| （无） | （无） |", ""]
+    lines = [f"| {headers[0]} | {headers[1]} |", "| --- | --- |"]
     for key, value in rows:
         cell = str(value).replace("\n", "<br>").replace("|", "\\|")
         lines.append(f"| {key} | {cell} |")
     lines.append("")
     return lines
+
+
+def _numbered_table(
+    rows: list[tuple[str, ...]],
+    *,
+    headers: list[str],
+) -> list[str]:
+    """Table with a leading 序号 column."""
+    cols = ["序号", *headers]
+    lines = [
+        "| " + " | ".join(cols) + " |",
+        "| " + " | ".join("---" for _ in cols) + " |",
+    ]
+    for idx, row in enumerate(rows, start=1):
+        cells = [str(idx), *[str(item).replace("\n", "<br>").replace("|", "\\|") for item in row]]
+        lines.append("| " + " | ".join(cells) + " |")
+    lines.append("")
+    return lines
+
+
+def _load_text_from_url_or_paths(url: str | None, candidates: list[Path]) -> str | None:
+    for path in candidates:
+        if path.is_file():
+            try:
+                return path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+    if url and url.startswith("file://"):
+        path = Path(url.removeprefix("file://"))
+        if path.is_file():
+            try:
+                return path.read_text(encoding="utf-8")
+            except OSError:
+                pass
+    if url and url.startswith(("http://", "https://")):
+        try:
+            with urllib.request.urlopen(url, timeout=20) as resp:  # noqa: S310 — OSS public URL
+                return resp.read().decode("utf-8", errors="replace")
+        except (urllib.error.URLError, TimeoutError, ValueError, OSError):
+            return None
+    return None
+
+
+def _artifact_local_candidates(
+    data_root: Path | None,
+    *,
+    loop: int,
+    exp_id: str,
+    suffix: str,
+) -> list[Path]:
+    if data_root is None:
+        return []
+    name = f"{exp_id}_{suffix}"
+    return [
+        data_root / "ledger" / "experiments" / f"loop_{loop:03d}" / name,
+        data_root / "ledger" / "artifacts_pending" / name,
+    ]
+
+
+def _load_edit_prompt(record: ExperimentRecord, data_root: Path | None) -> str | None:
+    return _load_text_from_url_or_paths(
+        record.artifacts.edit_prompt_url,
+        _artifact_local_candidates(
+            data_root, loop=record.loop, exp_id=record.exp_id, suffix="edit_prompt.txt"
+        ),
+    )
+
+
+def _load_judge_json(record: ExperimentRecord, data_root: Path | None) -> str | None:
+    raw = _load_text_from_url_or_paths(
+        record.judge_result_url,
+        _artifact_local_candidates(
+            data_root, loop=record.loop, exp_id=record.exp_id, suffix="judge.json"
+        ),
+    )
+    if raw is None:
+        return None
+    try:
+        return json.dumps(json.loads(raw), ensure_ascii=False, indent=2)
+    except json.JSONDecodeError:
+        return raw.strip()
+
+
+def _format_recipe_detail(doc: KnowledgeDocument) -> str:
+    status = doc.status.value
+    status_zh = {
+        KnowledgeStatus.CANDIDATE.value: "候选",
+        KnowledgeStatus.PENDING_REVIEW.value: "待审",
+        KnowledgeStatus.ACTIVE.value: "生效",
+        KnowledgeStatus.DEPRECATED.value: "已废弃",
+    }.get(status, status)
+    val = doc.validation_state.value if doc.validation_state else None
+    val_zh = {
+        ValidationState.PENDING.value: "待验证",
+        ValidationState.VALIDATING.value: "验证中",
+        ValidationState.RESOLVED.value: "已决议",
+    }.get(val or "", val or "（无）")
+    parts = [
+        f"**ID** `{doc.id}`",
+        f"**状态** {status_zh} (`{status}`)",
+        f"**样本** `{doc.case_id}`" if doc.case_id else "**样本** （无）",
+        f"**维度** `{doc.declared_dimension}`" if doc.declared_dimension else "**维度** （无）",
+        f"**验证状态** {val_zh}",
+        f"**P.1** `{doc.p1_variant_ref}`" if doc.p1_variant_ref else "**P.1** （无）",
+        f"**TTL** {doc.ttl_loops}" if doc.ttl_loops is not None else "**TTL** （无）",
+        f"**创建 loop** {doc.created_loop} / **更新 loop** {doc.updated_loop}",
+    ]
+    if doc.scope.image_class:
+        parts.append(f"**场景类** {doc.scope.image_class}")
+    if doc.strategy_summary:
+        parts.append(f"**策略摘要** {doc.strategy_summary.strip()}")
+    if doc.evidence:
+        parts.append("**证据** " + ", ".join(f"`{x}`" for x in doc.evidence))
+    if doc.lineage.derived_from:
+        parts.append(f"**来源** `{doc.lineage.derived_from}`")
+    return "<br>".join(parts)
 
 
 def _category_zh(value: str | None) -> str:
@@ -210,6 +327,7 @@ def _format_experiment_section(
     record: ExperimentRecord,
     *,
     strategy_summary: str | None = None,
+    data_root: Path | None = None,
 ) -> list[str]:
     summary = record.judge_summary
     arts = record.artifacts
@@ -245,23 +363,59 @@ def _format_experiment_section(
                 ("失败标签", tags),
             ]
         )
+
+    prompt_text = _load_edit_prompt(record, data_root)
+    judge_text = _load_judge_json(record, data_root)
+
+    prompt_cell = _md_link("源文件", arts.edit_prompt_url)
+    if prompt_text:
+        prompt_cell = f"{prompt_cell}<br>（完整内容见下方）" if arts.edit_prompt_url else "（完整内容见下方）"
+    judge_cell = _md_link("源文件", record.judge_result_url)
+    if judge_text:
+        judge_cell = f"{judge_cell}<br>（完整内容见下方）" if record.judge_result_url else "（完整内容见下方）"
+
     rows.extend(
         [
-            ("编辑提示词", _md_link("打开", arts.edit_prompt_url)),
-            ("裁判 JSON", _md_link("打开", record.judge_result_url)),
+            ("编辑提示词", prompt_cell),
+            ("裁判 JSON", judge_cell),
             ("上传待重试", "是" if arts.upload_pending else "否"),
         ]
     )
-    return [
+    detail_blocks: list[str] = [
         f"### {record.exp_id}",
         "",
         *_kv_table(rows),
-        *_md_compare_table(
+    ]
+    if prompt_text:
+        detail_blocks.extend(
+            [
+                "#### 编辑提示词（完整）",
+                "",
+                "```text",
+                prompt_text.strip(),
+                "```",
+                "",
+            ]
+        )
+    if judge_text:
+        detail_blocks.extend(
+            [
+                "#### 裁判 JSON（完整）",
+                "",
+                "```json",
+                judge_text,
+                "```",
+                "",
+            ]
+        )
+    detail_blocks.extend(
+        _md_compare_table(
             exp_id=record.exp_id,
             original_url=arts.original_image_url,
             result_url=arts.result_image_url,
-        ),
-    ]
+        )
+    )
+    return detail_blocks
 
 
 def build_loop_report(
@@ -277,6 +431,7 @@ def build_loop_report(
     mail_status: str | None = None,
     t0_text: str | None = None,
     data_root: Path | None = None,
+    top_recipe: KnowledgeDocument | None = None,
 ) -> tuple[str, list[str], int | None]:
     candidates = _candidate_lookup(state)
     all_records = list(records) + list(validation_records or [])
@@ -366,12 +521,19 @@ def build_loop_report(
         ("F.5", "生成报告 + 发送知会邮件"),
     ]
 
+    if top_recipe is not None:
+        recipe_cell = _format_recipe_detail(top_recipe)
+    elif state.top_recipe_id:
+        recipe_cell = f"`{state.top_recipe_id}`（详情未找到）"
+    else:
+        recipe_cell = "（无）"
+
     meta_rows = [
         ("批次", str(state.batch)),
         ("主样本", f"`{state.case_id}`"),
         ("类别", f"{_category_zh(state.category)} (`{state.category}`)"),
         ("最优候选", f"`{state.top_candidate_id}`" if state.top_candidate_id else "（无）"),
-        ("最优配方", f"`{state.top_recipe_id}`" if state.top_recipe_id else "（无）"),
+        ("最优配方", recipe_cell),
         (
             "报告路径",
             f"`{getattr(state, 'report_path', None) or f'ledger/reports/loop_{state.loop:03d}.md'}`",
@@ -423,7 +585,11 @@ def build_loop_report(
         if cand:
             strategy_summary = str(cand.get("strategy_summary") or "") or None
         experiment_sections.extend(
-            _format_experiment_section(record, strategy_summary=strategy_summary)
+            _format_experiment_section(
+                record,
+                strategy_summary=strategy_summary,
+                data_root=data_root,
+            )
         )
 
     validation_sections: list[str] = []
@@ -454,13 +620,16 @@ def build_loop_report(
             validation_sections.append(
                 f"| `{item.exp_id}` | `{item.case_id}` | {item.score} | "
                 f"{_verdict_zh(item.verdict.value if item.verdict else None)} | "
-                f"{_md_link('图', original_url)} | {_md_link('图', result_url)} |"
+                f"{_md_image(f'{item.exp_id} 原图', original_url)} | "
+                f"{_md_image(f'{item.exp_id} 结果图', result_url)} |"
             )
         validation_sections.append("")
         for item in validation.outcomes:
             record = by_id.get(item.exp_id)
             if record is not None:
-                validation_sections.extend(_format_experiment_section(record))
+                validation_sections.extend(
+                    _format_experiment_section(record, data_root=data_root)
+                )
             else:
                 validation_sections.extend(
                     [
@@ -499,7 +668,7 @@ def build_loop_report(
         ),
         "## 本轮流程",
         "",
-        *_kv_table(flow_rows),
+        *_numbered_table(flow_rows, headers=["阶段", "说明"]),
         "## 假设",
         "",
         hypothesis,

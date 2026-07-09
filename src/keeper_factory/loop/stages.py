@@ -738,6 +738,7 @@ def stage_f5(
     validation: ValidationCampaignResult | None,
     synthesis: SynthesisResult | None,
     ledger: LedgerStore | None = None,
+    memory: MemoryStore | None = None,
     uploader: ArtifactUploader | None = None,
     mail: MailChannel | None = None,
 ) -> LoopState:
@@ -753,6 +754,10 @@ def stage_f5(
             if item.kind == ExperimentKind.VALIDATION
         ]
 
+    top_recipe = None
+    if memory is not None and state.top_recipe_id:
+        top_recipe = memory.get(state.top_recipe_id)
+
     t0_path = loaded.prompts_dir / "t0.txt"
     t0_text = t0_path.read_text(encoding="utf-8").strip() if t0_path.is_file() else ""
     body, short_summary, main_score = build_loop_report(
@@ -766,6 +771,7 @@ def stage_f5(
         validation_records=validation_records,
         t0_text=t0_text,
         data_root=loaded.data_root,
+        top_recipe=top_recipe,
     )
     atomic_write_text(report_path, body)
     state.report_path = str(report_path)
