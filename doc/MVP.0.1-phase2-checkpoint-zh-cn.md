@@ -21,6 +21,8 @@
 
 单文件 `ledger/checkpoint.json`，**临时文件写入 + 原子 rename**：
 
+> 若 CLI 使用 `--exp-name <exp_name>` 运行，则 checkpoint 路径为：`ledger/exp/<exp_name>/checkpoint.json`（不同实验空间互不影响）。
+
 ```json
 {
   "loop": 12,

@@ -22,6 +22,7 @@
 
 ```
 ledger/
+  exp/<exp_name>/                  # (optional) experiment namespace root
   experiments/
     loop_012/
       exp_loop012_main_c1.json      # one experiment = one JSON file
@@ -37,9 +38,14 @@ ledger/
     loop_012.md                     # rendered Report + email dispatch status
   signatures.jsonl                  # dedup index (rebuildable from experiments/)
   budget.jsonl                      # per-loop cost bookkeeping
+  checkpoint.json                   # in-flight recovery point (cleared on success)
+  runtime_state.json                # lightweight status snapshot (status/awaiting approval)
+  artifacts_pending/                # local fallback for failed OSS uploads (cleanable)
 ```
 
 All of the above is git-managed metadata. **Binary artifacts (result images, edit prompts, full judge JSON) live on OSS**; records carry URLs plus sha256 checksums (tamper-evidence / verifiability).
+
+> `exp/<exp_name>/` note: when the CLI runs with `--exp-name <exp_name>`, the ledger read/write root is switched to `ledger/exp/<exp_name>/` to isolate checkpoint/indices/reports across experiments. When `--exp-name` is omitted, the default root remains `ledger/`.
 
 ## 3. Experiment Record Schema (the atomic unit)
 

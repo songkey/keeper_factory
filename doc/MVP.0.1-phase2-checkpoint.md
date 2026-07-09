@@ -21,6 +21,8 @@ By design, most state is already persisted in real time (append-only Ledger, YAM
 
 Single file `ledger/checkpoint.json`, written via **temp file + atomic rename**:
 
+> When the CLI runs with `--exp-name <exp_name>`, the checkpoint path becomes `ledger/exp/<exp_name>/checkpoint.json` (isolated per experiment namespace).
+
 ```json
 {
   "loop": 12,

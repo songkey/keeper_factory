@@ -6,6 +6,8 @@ from keeper_factory.goldenset.loader import (
     load_image,
     load_original_image,
     load_target_card,
+    next_case_id,
+    parse_case_index,
 )
 
 __all__ = [
@@ -16,4 +18,6 @@ __all__ = [
     "load_image",
     "load_original_image",
     "load_target_card",
+    "next_case_id",
+    "parse_case_index",
 ]

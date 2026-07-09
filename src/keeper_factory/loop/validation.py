@@ -12,6 +12,7 @@ from keeper_factory.judge import JudgeOrchestrator, judge_summary_from_result
 from keeper_factory.judge.scoring import category_validation_score
 from keeper_factory.ledger import LedgerStore, compute_experiment_signature, format_exp_id, utc_now_iso
 from keeper_factory.loop.artifacts import ArtifactUploader
+from keeper_factory.loop.edit_prompt import generate_image_edit_prompt
 from keeper_factory.loop.p1_render import load_current_p1
 from keeper_factory.memory import MemoryStore
 from keeper_factory.models.hub import ModelHub
@@ -139,18 +140,17 @@ def run_validation_campaign(
         original = load_original_image(loaded.data_root, case_id)
         exp_id = format_exp_id(loop=state_loop, kind="val", suffix=f"s{idx}")
         strategy_summary = recipe.strategy_summary or "validation replay"
-        edit_prompt = (
-            f"Improve along {recipe.declared_dimension}.\n"
-            f"Strategy: {strategy_summary}"
+        j1_prompt, edit_prompt = generate_image_edit_prompt(
+            hub=hub,
+            prompts_dir=loaded.prompts_dir,
+            original=original,
+            declared_dimension=recipe.declared_dimension or "other",
+            strategy_summary=strategy_summary,
+            dry_run=dry_run,
         )
-        if not dry_run:
-            hub.reset_cost()
-            edit_prompt = hub.generate_text(
-                node="f2_edit_prompt",
-                user_prompt=edit_prompt,
-                images=[original],
-            )
+        j1_prompt_path = out_dir / f"{exp_id}_j1_prompt.txt"
         edit_prompt_path = out_dir / f"{exp_id}_edit_prompt.txt"
+        atomic_write_text(j1_prompt_path, j1_prompt + "\n")
         atomic_write_text(edit_prompt_path, edit_prompt + "\n")
 
         if dry_run:
@@ -234,6 +234,10 @@ def run_validation_campaign(
             )
 
         oss_prefix = f"experiments/{oss_scope}loop_{state_loop:03d}/{exp_id}"
+        j1_ref = uploader.publish_file(
+            j1_prompt_path,
+            oss_key=f"{oss_prefix}_j1_prompt.txt",
+        )
         prompt_ref = uploader.publish_file(
             edit_prompt_path,
             oss_key=f"{oss_prefix}_edit_prompt.txt",
@@ -242,8 +246,11 @@ def run_validation_campaign(
             result_image_path,
             oss_key=f"{oss_prefix}_result.png",
         )
-        upload_pending = prompt_ref.pending or image_ref.pending or (
-            judge_ref.pending if judge_ref is not None else False
+        upload_pending = (
+            j1_ref.pending
+            or prompt_ref.pending
+            or image_ref.pending
+            or (judge_ref.pending if judge_ref is not None else False)
         )
 
         strategy = StrategyInfo(
@@ -283,6 +290,7 @@ def run_validation_campaign(
             env=env,
             artifacts=Artifacts(
                 original_image_url=original_image_url,
+                j1_prompt_url=j1_ref.url,
                 edit_prompt_url=prompt_ref.url,
                 result_image_url=image_ref.url,
                 result_image_sha256=result_sha,

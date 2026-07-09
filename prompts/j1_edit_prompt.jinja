@@ -1,0 +1,18 @@
+{# J1 — VLM writes the prompt that will be sent to the Image Edit model #}
+You are writing a prompt for an image-edit model (not a caption, not a status report).
+
+Look at the attached photo. Using the declared dimension and strategy below, write the FINAL edit instruction that will be passed verbatim to the image-edit model.
+
+Hard rules:
+- Output ONLY the edit instruction text. No preamble, no closing remarks.
+- Do NOT output acknowledgements such as "Done.", "OK", "已完成", "已按…优化".
+- Do NOT narrate what you already did; write what the edit model should do next.
+- Prefer imperative, concrete edits (what to change / what to keep).
+- Preserve identity, pose, and scene structure unless the strategy explicitly requires otherwise.
+- Keep it concise: typically 2–8 sentences, or a short bullet list.
+- Match the language of the strategy text.
+
+Declared dimension: {{ declared_dimension }}
+
+Strategy:
+{{ strategy_summary }}

@@ -70,16 +70,28 @@ uv run kf init --skip-checks     # 跳过全部探测
 | `kf doctor` | 仅跑环境探测（不重建目录） |
 | `kf mail-test` / `kf oss-test` | 单独探测邮件 / OSS |
 | `kf seed-demo` | 写入 1 个 demo case（`demo: true` 渐变占位图）+ anchor，仅供 dry-run；有真实 case 时不会进入 F.1/F.4a 采样 |
-| `kf run [--loops N] [--dry-run]` | 执行进化 loop |
-| `kf resume [--force]` | 从 checkpoint 恢复（检测 config/prompt 漂移） |
-| `kf status` | 查看当前 loop / batch / stage 状态 |
-| `kf approve` | 本地审批兜底 |
+| `kf run [--loops N] [--dry-run] [--exp-name NAME]` | 执行进化 loop（可选用 `exp_name` 做 IO 隔离） |
+| `kf resume [--force] [--exp-name NAME]` | 从 checkpoint 恢复（检测 config/prompt 漂移） |
+| `kf status [--exp-name NAME]` | 查看当前 loop / batch / stage 状态 |
+| `kf approve [--exp-name NAME]` | 本地审批兜底（按 `exp_name` 找批次文件与知识库） |
+| `kf clear [--exp-name NAME]` | 清除本地 checkpoint/runtime 与临时产物（**不删除 OSS 记录**） |
 
 产物与报告约定：
 
 - F.2 / F.3 / F.4a 的 edit prompt、结果图、judge JSON **上传 OSS 后删除本地临时文件**；ledger 记录只保留 URL + sha256
 - Golden Set 原图会上传供报告引用，**不删除**本地源文件
 - F.5 报告含完整流程 / 候选输入 / 每实验图文对比（OSS URL）；邮件为 multipart（纯文本 + HTML，图片用 OSS URL 嵌入）
+
+### `exp_name`（实验命名空间）
+
+当你需要并行跑多套实验（互不影响 checkpoint / ledger / memory），可为命令添加 `--exp-name <NAME>`：
+
+- **本地落盘隔离**：
+  - 默认（不传）：`data/ledger/...` 与 `data/memory/...`
+  - 传 `--exp-name expA`：
+    - `data/ledger/exp/expA/...`
+    - `data/memory/exp/expA/...`
+- **OSS 路径隔离**：实验/报告对象的 key 会带 `expA/` 前缀段，避免覆盖默认空间的对象。
 
 开发中若 `kf` 未反映最新代码，可用：
 
@@ -92,10 +104,12 @@ PYTHONPATH=src python -m keeper_factory.cli <command>
 v0 目标：**13 case**（5 bad / 5 good / 3 redline）。每个 case 目录结构：
 
 ```
-data/goldenset/case_001/
+data/goldenset/case_002/
   original.jpg
   target_card.yaml
 ```
+
+`case_id` **不必连续**：删除某个编号（如早期 demo `case_001`）不影响 F.1 / F.4a 采样；后续用 `preprocess_goldenset.py` 追加时会按现有最大编号 +1 分配（例如已有 `case_014` 则下一个是 `case_015`）。目录名须与 `target_card.yaml` 内的 `case_id` 一致。
 
 Target Card 字段说明见 [`doc/MVP.0.1-phase1-goldenset-zh-cn.md`](doc/MVP.0.1-phase1-goldenset-zh-cn.md)。
 
@@ -170,6 +184,13 @@ kf status
 - `data/ledger/reports/loop_001.md`
 - `data/ledger/experiments/loop_001/`
 - `data/ledger/checkpoint.json`（loop 正常结束时应被清除）
+
+使用 `--exp-name expA` 时，对应路径为：
+
+- `data/ledger/exp/expA/loops/loop_001.json`
+- `data/ledger/exp/expA/reports/loop_001.md`
+- `data/ledger/exp/expA/experiments/loop_001/`
+- `data/ledger/exp/expA/checkpoint.json`
 
 ## 首次真实运行（Loop 0）清单
 

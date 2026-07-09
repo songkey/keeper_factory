@@ -8,7 +8,13 @@ import numpy as np
 from PIL import Image
 
 from keeper_factory.loop.artifacts import ArtifactUploader
-from keeper_factory.loop.report import build_loop_report, markdown_to_html
+from keeper_factory.loop.report import (
+    build_loop_report,
+    mail_subject_batch,
+    mail_subject_loop,
+    markdown_to_html,
+    report_title,
+)
 from keeper_factory.memory.yaml_io import dump_yaml_dict
 from keeper_factory.schemas import (
     Artifacts,
@@ -57,6 +63,7 @@ def _record(
         ),
         artifacts=Artifacts(
             original_image_url=original,
+            j1_prompt_url="https://oss.example.com/j1.txt",
             edit_prompt_url=prompt,
             result_image_url=result,
             result_image_sha256="0" * 64,
@@ -174,19 +181,17 @@ def test_build_loop_report_chinese_layout(tmp_path: Path) -> None:
 
     exp_dir = tmp_path / "ledger" / "experiments" / "loop_001"
     exp_dir.mkdir(parents=True)
+    (exp_dir / "loop001_main_c1_j1_prompt.txt").write_text(
+        "J1_PROMPT_FOR_VLM\n", encoding="utf-8"
+    )
     (exp_dir / "loop001_main_c1_edit_prompt.txt").write_text(
         "FULL_EDIT_PROMPT_BODY\nline2\n", encoding="utf-8"
     )
-    (exp_dir / "loop001_main_c1_judge.json").write_text(
-        json.dumps({"verdict_vs_original": "better", "score": 3}, ensure_ascii=False),
-        encoding="utf-8",
+    (exp_dir / "loop001_val_s1_j1_prompt.txt").write_text(
+        "VAL_J1_PROMPT\n", encoding="utf-8"
     )
     (exp_dir / "loop001_val_s1_edit_prompt.txt").write_text(
         "VAL_PROMPT_BODY\n", encoding="utf-8"
-    )
-    (exp_dir / "loop001_val_s1_judge.json").write_text(
-        json.dumps({"verdict_vs_original": "same"}, ensure_ascii=False),
-        encoding="utf-8",
     )
 
     recipe = KnowledgeDocument(
@@ -249,6 +254,7 @@ def test_build_loop_report_chinese_layout(tmp_path: Path) -> None:
         env=record.env,
         artifacts=Artifacts(
             original_image_url="https://oss.example.com/val_original.png",
+            j1_prompt_url="https://oss.example.com/val_j1.txt",
             edit_prompt_url="https://oss.example.com/val_prompt.txt",
             result_image_url="https://oss.example.com/val_result.png",
             result_image_sha256="1" * 64,
@@ -300,11 +306,15 @@ def test_build_loop_report_chinese_layout(tmp_path: Path) -> None:
     assert "提亮主体并冻结身份" in body
     assert "| 序号 | 阶段 | 说明 |" in body
     assert "| 1 | F.1 |" in body
+    assert "J1_PROMPT_FOR_VLM" in body
     assert "FULL_EDIT_PROMPT_BODY" in body
-    assert '"verdict_vs_original": "better"' in body
-    assert "#### 编辑提示词（完整）" in body
-    assert "#### 裁判 JSON（完整）" in body
+    assert "VAL_J1_PROMPT" in body
     assert "VAL_PROMPT_BODY" in body
+    assert "| J1 提示词 |" in body
+    assert "| 编辑提示词 |" in body
+    assert "| 裁判 JSON | [打开](https://oss.example.com/judge.json)" in body
+    assert "#### 编辑提示词（完整）" not in body
+    assert "#### 裁判 JSON（完整）" not in body
     assert (
         "| ![loop001_val_s1 原图](https://oss.example.com/val_original.png) "
         "| ![loop001_val_s1 结果图](https://oss.example.com/val_result.png) |"
@@ -312,6 +322,44 @@ def test_build_loop_report_chinese_layout(tmp_path: Path) -> None:
     assert "| 原图 | 结果图 |" in body
     assert short[0] == "case=case_001"
     assert score == 1  # bad + better
+
+
+def test_report_and_mail_titles_include_exp_name(tmp_path: Path) -> None:
+    assert report_title(loop=3, exp_name=None) == "# 第 3 轮报告"
+    assert report_title(loop=3, exp_name="expA") == "# [expA] 第 3 轮报告"
+    assert mail_subject_loop(loop=3, exp_name=None) == "[KF][loop 003] Report"
+    assert mail_subject_loop(loop=3, exp_name="expA") == "[KF][expA][loop 003] Report"
+    assert mail_subject_batch(batch=2, exp_name="expA") == (
+        "[KF][expA][batch 002] pending approval"
+    )
+
+    state = SimpleNamespace(
+        loop=3,
+        batch=1,
+        case_id="case_002",
+        category="bad",
+        top_candidate_id=None,
+        top_recipe_id=None,
+        candidates=[],
+        candidate_exp_ids=[],
+        injected_knowledge=[],
+        summary_lines=[],
+        dnr_skipped=0,
+        report_path=None,
+    )
+    body, _, _ = build_loop_report(
+        state=state,
+        records=[],
+        validation=None,
+        synthesis=None,
+        loops_root=tmp_path,
+        stagnation_threshold=3,
+        t0_text="t0",
+        data_root=tmp_path,
+        exp_name="expA",
+    )
+    assert body.startswith("# [expA] 第 3 轮报告\n")
+    assert "| 实验名 | `expA` |" in body
 
 
 def test_markdown_to_html_responsive_compare_table() -> None:

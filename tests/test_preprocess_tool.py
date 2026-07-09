@@ -46,3 +46,12 @@ def test_build_target_card_category_fields() -> None:
     assert "problem_note" in card_bad
     assert "established_note" in card_good
     assert "trap_note" in card_red
+
+
+def test_next_case_id_allows_gaps(tmp_path: Path) -> None:
+    mod = _load_module()
+    goldenset = tmp_path / "goldenset"
+    (goldenset / "case_002").mkdir(parents=True)
+    (goldenset / "case_014").mkdir(parents=True)
+    (goldenset / "anchors").mkdir(parents=True)
+    assert mod.next_case_id(goldenset) == "case_015"

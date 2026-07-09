@@ -135,46 +135,28 @@ def _artifact_local_candidates(
     ]
 
 
-def _load_edit_prompt(
+def _load_prompt_text(
     record: ExperimentRecord,
     data_root: Path | None,
     *,
     ledger_root: Path | None = None,
+    url: str | None,
+    suffix: str,
 ) -> str | None:
     return _load_text_from_url_or_paths(
-        record.artifacts.edit_prompt_url,
+        url,
         _artifact_local_candidates(
             data_root,
             ledger_root=ledger_root,
             loop=record.loop,
             exp_id=record.exp_id,
-            suffix="edit_prompt.txt",
+            suffix=suffix,
         ),
     )
 
 
-def _load_judge_json(
-    record: ExperimentRecord,
-    data_root: Path | None,
-    *,
-    ledger_root: Path | None = None,
-) -> str | None:
-    raw = _load_text_from_url_or_paths(
-        record.judge_result_url,
-        _artifact_local_candidates(
-            data_root,
-            ledger_root=ledger_root,
-            loop=record.loop,
-            exp_id=record.exp_id,
-            suffix="judge.json",
-        ),
-    )
-    if raw is None:
-        return None
-    try:
-        return json.dumps(json.loads(raw), ensure_ascii=False, indent=2)
-    except json.JSONDecodeError:
-        return raw.strip()
+def _cell_multiline(text: str) -> str:
+    return text.strip().replace("\n", "<br>").replace("|", "\\|")
 
 
 def _format_recipe_detail(doc: KnowledgeDocument) -> str:
@@ -387,58 +369,79 @@ def _format_experiment_section(
             ]
         )
 
-    prompt_text = _load_edit_prompt(record, data_root, ledger_root=ledger_root)
-    judge_text = _load_judge_json(record, data_root, ledger_root=ledger_root)
+    j1_text = _load_prompt_text(
+        record,
+        data_root,
+        ledger_root=ledger_root,
+        url=arts.j1_prompt_url,
+        suffix="j1_prompt.txt",
+    )
+    edit_text = _load_prompt_text(
+        record,
+        data_root,
+        ledger_root=ledger_root,
+        url=arts.edit_prompt_url,
+        suffix="edit_prompt.txt",
+    )
 
-    prompt_cell = _md_link("源文件", arts.edit_prompt_url)
-    if prompt_text:
-        prompt_cell = f"{prompt_cell}<br>（完整内容见下方）" if arts.edit_prompt_url else "（完整内容见下方）"
-    judge_cell = _md_link("源文件", record.judge_result_url)
-    if judge_text:
-        judge_cell = f"{judge_cell}<br>（完整内容见下方）" if record.judge_result_url else "（完整内容见下方）"
+    if j1_text:
+        j1_cell = _cell_multiline(j1_text)
+        if arts.j1_prompt_url and arts.j1_prompt_url.startswith("http"):
+            j1_cell = f"{_md_link('源文件', arts.j1_prompt_url)}<br>{j1_cell}"
+    else:
+        j1_cell = _md_link("打开", arts.j1_prompt_url)
+
+    if edit_text:
+        edit_cell = _cell_multiline(edit_text)
+        if arts.edit_prompt_url and arts.edit_prompt_url.startswith("http"):
+            edit_cell = f"{_md_link('源文件', arts.edit_prompt_url)}<br>{edit_cell}"
+    else:
+        edit_cell = _md_link("打开", arts.edit_prompt_url)
 
     rows.extend(
         [
-            ("编辑提示词", prompt_cell),
-            ("裁判 JSON", judge_cell),
+            ("J1 提示词", j1_cell),
+            ("编辑提示词", edit_cell),
+            ("裁判 JSON", _md_link("打开", record.judge_result_url)),
             ("上传待重试", "是" if arts.upload_pending else "否"),
         ]
     )
-    detail_blocks: list[str] = [
+    return [
         f"### {record.exp_id}",
         "",
         *_kv_table(rows),
-    ]
-    if prompt_text:
-        detail_blocks.extend(
-            [
-                "#### 编辑提示词（完整）",
-                "",
-                "```text",
-                prompt_text.strip(),
-                "```",
-                "",
-            ]
-        )
-    if judge_text:
-        detail_blocks.extend(
-            [
-                "#### 裁判 JSON（完整）",
-                "",
-                "```json",
-                judge_text,
-                "```",
-                "",
-            ]
-        )
-    detail_blocks.extend(
-        _md_compare_table(
+        *_md_compare_table(
             exp_id=record.exp_id,
             original_url=arts.original_image_url,
             result_url=arts.result_image_url,
-        )
-    )
-    return detail_blocks
+        ),
+    ]
+
+
+def format_exp_label(exp_name: str | None) -> str | None:
+    value = (exp_name or "").strip()
+    return value or None
+
+
+def report_title(*, loop: int, exp_name: str | None = None) -> str:
+    label = format_exp_label(exp_name)
+    if label:
+        return f"# [{label}] 第 {loop} 轮报告"
+    return f"# 第 {loop} 轮报告"
+
+
+def mail_subject_loop(*, loop: int, exp_name: str | None = None) -> str:
+    label = format_exp_label(exp_name)
+    if label:
+        return f"[KF][{label}][loop {loop:03d}] Report"
+    return f"[KF][loop {loop:03d}] Report"
+
+
+def mail_subject_batch(*, batch: int, exp_name: str | None = None) -> str:
+    label = format_exp_label(exp_name)
+    if label:
+        return f"[KF][{label}][batch {batch:03d}] pending approval"
+    return f"[KF][batch {batch:03d}] pending approval"
 
 
 def build_loop_report(
@@ -454,6 +457,7 @@ def build_loop_report(
     mail_status: str | None = None,
     t0_text: str | None = None,
     data_root: Path | None = None,
+    exp_name: str | None = None,
     ledger_root: Path | None = None,
     top_recipe: KnowledgeDocument | None = None,
 ) -> tuple[str, list[str], int | None]:
@@ -552,7 +556,9 @@ def build_loop_report(
     else:
         recipe_cell = "（无）"
 
+    exp_label = format_exp_label(exp_name)
     meta_rows = [
+        ("实验名", f"`{exp_label}`" if exp_label else "（默认）"),
         ("批次", str(state.batch)),
         ("主样本", f"`{state.case_id}`"),
         ("类别", f"{_category_zh(state.category)} (`{state.category}`)"),
@@ -675,7 +681,7 @@ def build_loop_report(
     ] or [("结果", "无")]
 
     lines = [
-        f"# 第 {state.loop} 轮报告",
+        report_title(loop=state.loop, exp_name=exp_name),
         "",
         "## T0 目标",
         "",

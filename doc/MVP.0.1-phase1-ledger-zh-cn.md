@@ -22,6 +22,7 @@
 
 ```
 ledger/
+  exp/<exp_name>/                  # （可选）实验命名空间隔离根目录
   experiments/
     loop_012/
       exp_loop012_main_c1.json      # 一条实验一个 JSON 文件
@@ -37,9 +38,14 @@ ledger/
     loop_012.md                     # 渲染后的 Report + 邮件发送状态
   signatures.jsonl                  # 去重索引（可由 experiments/ 全量重建）
   budget.jsonl                      # 每轮成本流水
+  checkpoint.json                   # 运行中断恢复点（正常结束应清除）
+  runtime_state.json                # 运行状态快照（status/awaiting approval）
+  artifacts_pending/                # OSS 上传失败的本地回落暂存（可用 clear 清理）
 ```
 
 以上全部是 git 管理的元数据。**二进制产物（结果图、edit prompt、裁判完整 JSON）存 OSS**；记录中携带 URL + sha256 校验值（防篡改、可校验）。
+
+> `exp/<exp_name>/` 说明：当 CLI 使用 `--exp-name <exp_name>` 运行时，ledger 的读写根目录会切到 `ledger/exp/<exp_name>/`，用于隔离不同实验的 checkpoint/产物索引/报告等；默认不传 `--exp-name` 时仍使用 `ledger/` 根目录。
 
 ## 3. 实验记录 Schema（原子单元）
 

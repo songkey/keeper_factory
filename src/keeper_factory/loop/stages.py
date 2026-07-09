@@ -25,11 +25,16 @@ from keeper_factory.ledger import (
     utc_now_iso,
 )
 from keeper_factory.loop.artifacts import ArtifactUploader
+from keeper_factory.loop.checkpoint import CheckpointStore
 from keeper_factory.loop.context import load_recent_loop_summaries
+from keeper_factory.loop.edit_prompt import generate_image_edit_prompt
 from keeper_factory.loop.p1_render import load_current_p1, render_p1_text, slots_from_record
 from keeper_factory.loop.ranking import rank_records
-from keeper_factory.loop.report import build_loop_report
-from keeper_factory.loop.checkpoint import CheckpointStore
+from keeper_factory.loop.report import (
+    build_loop_report,
+    mail_subject_batch,
+    mail_subject_loop,
+)
 from keeper_factory.loop.synthesis import SynthesisResult, synthesize_from_validation
 from keeper_factory.loop.validation import (
     ValidationCampaignResult,
@@ -352,18 +357,16 @@ def stage_f2(
         state.candidate_exp_ids.append(exp_id)
         declared_dimension = _normalize_dimension(str(candidate.get("declared_dimension") or "other"))
         strategy_summary = str(candidate.get("strategy_summary") or "")
-        edit_prompt = (
-            f"Improve the image along dimension '{declared_dimension}'.\n"
-            f"Strategy: {strategy_summary}"
+        j1_prompt, edit_prompt = generate_image_edit_prompt(
+            hub=hub,
+            prompts_dir=loaded.prompts_dir,
+            original=original,
+            declared_dimension=declared_dimension,
+            strategy_summary=strategy_summary,
         )
-        if not hub.dry_run:
-            hub.reset_cost()
-            edit_prompt = hub.generate_text(
-                node="f2_edit_prompt",
-                user_prompt=edit_prompt,
-                images=[original],
-            )
+        j1_prompt_path = out_dir / f"{exp_id}_j1_prompt.txt"
         edit_prompt_path = out_dir / f"{exp_id}_edit_prompt.txt"
+        atomic_write_text(j1_prompt_path, j1_prompt + "\n")
         atomic_write_text(edit_prompt_path, edit_prompt + "\n")
 
         if hub.dry_run:
@@ -383,6 +386,10 @@ def stage_f2(
         original_image_url = uploader.ensure_original_url(state.case_id)
         oss_scope = f"{exp_name.strip()}/" if exp_name and exp_name.strip() else ""
         oss_prefix = f"experiments/{oss_scope}loop_{state.loop:03d}/{exp_id}"
+        j1_ref = uploader.publish_file(
+            j1_prompt_path,
+            oss_key=f"{oss_prefix}_j1_prompt.txt",
+        )
         prompt_ref = uploader.publish_file(
             edit_prompt_path,
             oss_key=f"{oss_prefix}_edit_prompt.txt",
@@ -396,12 +403,14 @@ def stage_f2(
                 "exp_id": exp_id,
                 "declared_dimension": declared_dimension,
                 "strategy_summary": strategy_summary,
+                "j1_prompt": j1_prompt,
                 "edit_prompt": edit_prompt,
                 "original_image_url": original_image_url,
+                "j1_prompt_url": j1_ref.url,
                 "edit_prompt_url": prompt_ref.url,
                 "result_image_url": image_ref.url,
                 "result_image_sha256": result_sha,
-                "upload_pending": prompt_ref.pending or image_ref.pending,
+                "upload_pending": j1_ref.pending or prompt_ref.pending or image_ref.pending,
                 "result_image": result_image,
                 "injected_knowledge": list(state.injected_knowledge),
                 "p1_version": p1_version,
@@ -527,6 +536,7 @@ def stage_f3(
             env=env,
             artifacts=Artifacts(
                 original_image_url=output.get("original_image_url"),
+                j1_prompt_url=output.get("j1_prompt_url"),
                 edit_prompt_url=output["edit_prompt_url"],
                 result_image_url=output["result_image_url"],
                 result_image_sha256=output.get("result_image_sha256"),
@@ -786,6 +796,7 @@ def stage_f5(
         data_root=loaded.data_root,
         ledger_root=ledger_root,
         top_recipe=top_recipe,
+        exp_name=exp_name,
     )
     atomic_write_text(report_path, body)
     state.report_path = str(report_path)
@@ -814,7 +825,7 @@ def stage_f5(
                 1,
             )
         result = mail.send_markdown(
-            subject=f"[KF][loop {state.loop:03d}] Report",
+            subject=mail_subject_loop(loop=state.loop, exp_name=exp_name),
             markdown_body=mail_body,
         )
         state.summary_lines.append(result.as_summary())
@@ -900,10 +911,16 @@ def stage_batch_wait(
     report_text = ""
     if state.report_path and Path(state.report_path).is_file():
         report_text = Path(state.report_path).read_text(encoding="utf-8")
+    exp_label = (exp_name or "").strip()
+    batch_heading = (
+        f"# [KF][{exp_label}][batch {state.batch:03d}] Review required\n\n"
+        if exp_label
+        else f"# [KF][batch {state.batch:03d}] Review required\n\n"
+    )
     body = (
-        f"# [KF][batch {state.batch:03d}] Review required\n\n"
-        f"Batch {state.batch} ended at loop {state.loop}.\n\n"
-        f"## Pending knowledge ({len(pending_items)})\n\n"
+        batch_heading
+        + f"Batch {state.batch} ended at loop {state.loop}.\n\n"
+        + f"## Pending knowledge ({len(pending_items)})\n\n"
         + ("\n\n".join(review_blocks) if review_blocks else "(none)")
         + "\n\n## How to reply\n\n"
         "One decision per line:\n"
@@ -916,7 +933,7 @@ def stage_batch_wait(
     )
     if mail is not None and mail.enabled:
         result = mail.send_markdown(
-            subject=f"[KF][batch {state.batch:03d}] pending approval",
+            subject=mail_subject_batch(batch=state.batch, exp_name=exp_name),
             markdown_body=body,
         )
         state.summary_lines.append(result.as_summary())

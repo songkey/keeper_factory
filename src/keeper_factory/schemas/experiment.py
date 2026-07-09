@@ -32,6 +32,7 @@ class EnvInfo(StrictModel):
 
 class Artifacts(StrictModel):
     original_image_url: str | None = None
+    j1_prompt_url: str | None = None
     edit_prompt_url: str | None = None
     result_image_url: str | None = None
     result_image_sha256: str | None = None

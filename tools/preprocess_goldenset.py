@@ -165,16 +165,10 @@ def iter_images(root: Path):
 
 
 def next_case_id(goldenset_root: Path) -> str:
-    max_idx = 0
-    for path in goldenset_root.glob("case_*"):
-        if not path.is_dir():
-            continue
-        stem = path.name.replace("case_", "", 1)
-        try:
-            max_idx = max(max_idx, int(stem))
-        except ValueError:
-            continue
-    return f"case_{max_idx + 1:03d}"
+    """Allocate next case id; gaps in numbering are allowed."""
+    from keeper_factory.goldenset import next_case_id as _next_case_id
+
+    return _next_case_id(goldenset_root)
 
 
 def load_import_digests(log_path: Path) -> set[str]:
