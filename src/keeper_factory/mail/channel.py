@@ -9,6 +9,7 @@ from email.message import EmailMessage
 from pathlib import Path
 
 from keeper_factory.config import LoadedConfig
+from keeper_factory.loop.report import markdown_to_html
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,7 @@ class MailChannel:
         subject: str,
         body: str,
         to_addrs: list[str] | None = None,
+        html_body: str | None = None,
     ) -> MailSendResult:
         """Best-effort send. Never raises — mail must not block the loop."""
         if not self.enabled or self.loaded.secrets is None:
@@ -79,6 +81,8 @@ class MailChannel:
         message["From"] = self.cfg.from_
         message["To"] = ", ".join(recipients)
         message.set_content(body)
+        if html_body:
+            message.add_alternative(html_body, subtype="html")
 
         try:
             context = ssl.create_default_context()
@@ -96,11 +100,25 @@ class MailChannel:
         except Exception as exc:  # noqa: BLE001 — mail is optional transport
             err = f"{type(exc).__name__}: {exc}"
             logger.warning("mail send failed (%s): %s", self.cfg.smtp_host, err)
-            # Also print so CLI users see it without digging into log files.
             print(f"[kf mail] send failed via {self.cfg.smtp_host}: {err}", flush=True)
             result = MailSendResult(ok=False, skipped=False, error=err)
             self.last_result = result
             return result
+
+    def send_markdown(
+        self,
+        *,
+        subject: str,
+        markdown_body: str,
+        to_addrs: list[str] | None = None,
+    ) -> MailSendResult:
+        """Send multipart plain + HTML rendered from markdown (OSS image URLs embed as <img>)."""
+        return self.send_text_detailed(
+            subject=subject,
+            body=markdown_body,
+            to_addrs=to_addrs,
+            html_body=markdown_to_html(markdown_body),
+        )
 
 
 def loaded_has_mail_secrets(loaded: LoadedConfig) -> bool:

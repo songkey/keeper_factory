@@ -7,7 +7,7 @@ import numpy as np
 from PIL import Image
 
 from keeper_factory.config import LoadedConfig
-from keeper_factory.goldenset import list_case_ids, load_original_image, load_target_card
+from keeper_factory.goldenset import list_runnable_case_ids, load_original_image, load_target_card
 from keeper_factory.judge import JudgeOrchestrator, judge_summary_from_result
 from keeper_factory.judge.scoring import category_validation_score
 from keeper_factory.ledger import LedgerStore, compute_experiment_signature, format_exp_id, utc_now_iso
@@ -42,6 +42,10 @@ class ValidationOutcome:
     score: int
     verdict: Verdict | None
     redline_pass: bool
+    original_image_url: str | None = None
+    result_image_url: str | None = None
+    edit_prompt_url: str | None = None
+    judge_result_url: str | None = None
 
 
 @dataclass
@@ -73,7 +77,7 @@ def pick_validation_cases(
     k: int,
 ) -> list[str]:
     pool: list[str] = []
-    for case_id in list_case_ids(data_root):
+    for case_id in list_runnable_case_ids(data_root):
         card = load_target_card(data_root, case_id)
         if card.category != category:
             continue
@@ -81,7 +85,7 @@ def pick_validation_cases(
             continue
         pool.append(case_id)
     if not pool:
-        for case_id in list_case_ids(data_root):
+        for case_id in list_runnable_case_ids(data_root):
             card = load_target_card(data_root, case_id)
             if card.category == category:
                 pool.append(case_id)
@@ -160,6 +164,8 @@ def run_validation_campaign(
 
         result_image_path = out_dir / f"{exp_id}_result.png"
         Image.fromarray(result_image, mode="RGB").save(result_image_path)
+        result_sha = uploader.sha256_file(result_image_path)
+        original_image_url = uploader.ensure_original_url(case_id)
 
         if dry_run:
             verdict = Verdict.BETTER if card.category == CaseCategory.BAD else Verdict.SAME
@@ -168,7 +174,7 @@ def run_validation_campaign(
                 redline_pass=True,
                 verdict_vs_original=verdict,
             )
-            judge_result_url = None
+            judge_ref = None
             judge_summary = judge_summary_from_result(
                 JudgeResult.model_validate(
                     {
@@ -218,20 +224,23 @@ def run_validation_campaign(
                 verdict_vs_original=verdict,
             )
             judge_json_path = out_dir / f"{exp_id}_judge.json"
-            judge_result_url = uploader.url_for_json(
+            judge_ref = uploader.publish_json(
                 judge_result.model_dump(mode="json", by_alias=True),
                 oss_key=f"experiments/loop_{state_loop:03d}/{exp_id}_judge.json",
                 local_path=judge_json_path,
             )
 
         oss_prefix = f"experiments/loop_{state_loop:03d}/{exp_id}"
-        edit_prompt_url = uploader.url_for_file(
+        prompt_ref = uploader.publish_file(
             edit_prompt_path,
             oss_key=f"{oss_prefix}_edit_prompt.txt",
         )
-        result_image_url = uploader.url_for_file(
+        image_ref = uploader.publish_file(
             result_image_path,
             oss_key=f"{oss_prefix}_result.png",
+        )
+        upload_pending = prompt_ref.pending or image_ref.pending or (
+            judge_ref.pending if judge_ref is not None else False
         )
 
         strategy = StrategyInfo(
@@ -270,12 +279,14 @@ def run_validation_campaign(
             strategy=strategy,
             env=env,
             artifacts=Artifacts(
-                edit_prompt_url=edit_prompt_url,
-                result_image_url=result_image_url,
-                result_image_sha256=uploader.sha256_file(result_image_path),
+                original_image_url=original_image_url,
+                edit_prompt_url=prompt_ref.url,
+                result_image_url=image_ref.url,
+                result_image_sha256=result_sha,
+                upload_pending=upload_pending,
             ),
             judge_summary=judge_summary,
-            judge_result_url=judge_result_url if not dry_run else None,
+            judge_result_url=judge_ref.url if judge_ref is not None else None,
             status=ExperimentStatus.COMPLETED,
             cost=cost,
             created_at=utc_now_iso(),
@@ -292,6 +303,10 @@ def run_validation_campaign(
                 score=score,
                 verdict=verdict,
                 redline_pass=judge_summary.redline_pass,
+                original_image_url=original_image_url,
+                result_image_url=image_ref.url,
+                edit_prompt_url=prompt_ref.url,
+                judge_result_url=judge_ref.url if judge_ref is not None else None,
             )
         )
 

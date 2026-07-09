@@ -231,6 +231,8 @@ class LoopRuntime:
                     records=f3_records,
                     validation=validation,
                     synthesis=synthesis,
+                    ledger=self.ledger,
+                    uploader=self.uploader,
                     mail=self.mail,
                 )
             elif stage == LoopStage.BATCH_WAIT:
@@ -239,6 +241,7 @@ class LoopRuntime:
                     state=state,
                     memory=self.memory,
                     store=self.store,
+                    ledger=self.ledger,
                     mail=self.mail,
                 )
             self._save_state(state)

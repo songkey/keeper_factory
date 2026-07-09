@@ -61,9 +61,15 @@ class LedgerStore:
             paths = sorted((self.experiments_root / format_loop_dir(loop)).glob("*.json"))
         else:
             paths = sorted(self.experiments_root.glob("**/*.json"))
+        # Ignore sidecar artifacts (e.g. *_judge.json) that may remain when OSS is off.
+        record_paths = [
+            path
+            for path in paths
+            if path.name.endswith(".json") and not path.name.endswith("_judge.json")
+        ]
         return [
             ExperimentRecord.model_validate_json(path.read_text(encoding="utf-8"))
-            for path in paths
+            for path in record_paths
         ]
 
     def _append_signature(self, entry: SignatureIndexEntry) -> None:

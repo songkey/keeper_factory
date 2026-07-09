@@ -69,11 +69,17 @@ uv run kf init --skip-checks     # 跳过全部探测
 | `kf init` | 初始化 `data/`，并探测 env / OSS / mail |
 | `kf doctor` | 仅跑环境探测（不重建目录） |
 | `kf mail-test` / `kf oss-test` | 单独探测邮件 / OSS |
-| `kf seed-demo` | 写入 1 个 demo case + anchor，供 dry-run 使用 |
+| `kf seed-demo` | 写入 1 个 demo case（`demo: true` 渐变占位图）+ anchor，仅供 dry-run；有真实 case 时不会进入 F.1/F.4a 采样 |
 | `kf run [--loops N] [--dry-run]` | 执行进化 loop |
 | `kf resume [--force]` | 从 checkpoint 恢复（检测 config/prompt 漂移） |
 | `kf status` | 查看当前 loop / batch / stage 状态 |
 | `kf approve` | 本地审批兜底 |
+
+产物与报告约定：
+
+- F.2 / F.3 / F.4a 的 edit prompt、结果图、judge JSON **上传 OSS 后删除本地临时文件**；ledger 记录只保留 URL + sha256
+- Golden Set 原图会上传供报告引用，**不删除**本地源文件
+- F.5 报告含完整流程 / 候选输入 / 每实验图文对比（OSS URL）；邮件为 multipart（纯文本 + HTML，图片用 OSS URL 嵌入）
 
 开发中若 `kf` 未反映最新代码，可用：
 

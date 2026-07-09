@@ -11,7 +11,7 @@ from PIL import Image
 from pydantic import BaseModel, Field
 
 from keeper_factory.config import LoadedConfig
-from keeper_factory.goldenset import list_case_ids, load_original_image, load_target_card
+from keeper_factory.goldenset import list_runnable_case_ids, load_original_image, load_target_card
 from keeper_factory.judge import JudgeOrchestrator, OpponentCandidate, judge_summary_from_result
 from keeper_factory.judge.scoring import category_validation_score
 from keeper_factory.judge.vocab import format_vocab_for_prompt, is_valid_dimension
@@ -143,7 +143,7 @@ class LoopState:
 
 
 def pick_case_for_loop(data_root: Path, loop_no: int) -> tuple[str, CaseCategory]:
-    case_ids = list_case_ids(data_root)
+    case_ids = list_runnable_case_ids(data_root)
     if not case_ids:
         raise RuntimeError("goldenset is empty; add at least one case before running loops")
 
@@ -376,22 +376,28 @@ def stage_f2(
 
         result_image_path = out_dir / f"{exp_id}_result.png"
         Image.fromarray(result_image, mode="RGB").save(result_image_path)
+        result_sha = uploader.sha256_file(result_image_path)
+        original_image_url = uploader.ensure_original_url(state.case_id)
         oss_prefix = f"experiments/loop_{state.loop:03d}/{exp_id}"
+        prompt_ref = uploader.publish_file(
+            edit_prompt_path,
+            oss_key=f"{oss_prefix}_edit_prompt.txt",
+        )
+        image_ref = uploader.publish_file(
+            result_image_path,
+            oss_key=f"{oss_prefix}_result.png",
+        )
         outputs.append(
             {
                 "exp_id": exp_id,
                 "declared_dimension": declared_dimension,
                 "strategy_summary": strategy_summary,
-                "edit_prompt_path": str(edit_prompt_path),
-                "result_image_path": str(result_image_path),
-                "edit_prompt_url": uploader.url_for_file(
-                    edit_prompt_path,
-                    oss_key=f"{oss_prefix}_edit_prompt.txt",
-                ),
-                "result_image_url": uploader.url_for_file(
-                    result_image_path,
-                    oss_key=f"{oss_prefix}_result.png",
-                ),
+                "edit_prompt": edit_prompt,
+                "original_image_url": original_image_url,
+                "edit_prompt_url": prompt_ref.url,
+                "result_image_url": image_ref.url,
+                "result_image_sha256": result_sha,
+                "upload_pending": prompt_ref.pending or image_ref.pending,
                 "result_image": result_image,
                 "injected_knowledge": list(state.injected_knowledge),
                 "p1_version": p1_version,
@@ -473,7 +479,7 @@ def stage_f3(
 
         judge_results[output["exp_id"]] = judge_result
         judge_json_path = out_dir / f"{output['exp_id']}_judge.json"
-        judge_result_url = uploader.url_for_json(
+        judge_ref = uploader.publish_json(
             judge_result.model_dump(mode="json", by_alias=True),
             oss_key=f"experiments/loop_{state.loop:03d}/{output['exp_id']}_judge.json",
             local_path=judge_json_path,
@@ -514,12 +520,14 @@ def stage_f3(
             strategy=strategy,
             env=env,
             artifacts=Artifacts(
+                original_image_url=output.get("original_image_url"),
                 edit_prompt_url=output["edit_prompt_url"],
                 result_image_url=output["result_image_url"],
-                result_image_sha256=uploader.sha256_file(Path(output["result_image_path"])),
+                result_image_sha256=output.get("result_image_sha256"),
+                upload_pending=bool(output.get("upload_pending")) or judge_ref.pending,
             ),
             judge_summary=judge_summary_from_result(judge_result),
-            judge_result_url=judge_result_url,
+            judge_result_url=judge_ref.url,
             status=ExperimentStatus.COMPLETED,
             cost=cost,
             created_at=utc_now_iso(),
@@ -688,6 +696,40 @@ def stage_f4c(
     return state
 
 
+def _knowledge_summary(item) -> str:
+    if item.principle:
+        return str(item.principle)
+    if item.failure_pattern:
+        return str(item.failure_pattern)
+    if item.strategy_summary:
+        return str(item.strategy_summary)
+    if item.behavior:
+        return str(item.behavior)
+    return "(no summary)"
+
+
+def _evidence_image_pairs(
+    *,
+    ledger: LedgerStore,
+    evidence_ids: list[str],
+    loop: int,
+) -> list[tuple[str, str | None, str | None]]:
+    pairs: list[tuple[str, str | None, str | None]] = []
+    for exp_id in evidence_ids[:3]:
+        record = ledger.read_experiment(exp_id, loop=loop) or ledger.read_experiment(exp_id)
+        if record is None:
+            pairs.append((exp_id, None, None))
+            continue
+        pairs.append(
+            (
+                exp_id,
+                record.artifacts.original_image_url,
+                record.artifacts.result_image_url,
+            )
+        )
+    return pairs
+
+
 def stage_f5(
     *,
     loaded: LoadedConfig,
@@ -695,11 +737,24 @@ def stage_f5(
     records: list[ExperimentRecord],
     validation: ValidationCampaignResult | None,
     synthesis: SynthesisResult | None,
+    ledger: LedgerStore | None = None,
+    uploader: ArtifactUploader | None = None,
     mail: MailChannel | None = None,
 ) -> LoopState:
     report_dir = loaded.data_root / "ledger" / "reports"
     report_dir.mkdir(parents=True, exist_ok=True)
     report_path = report_dir / f"loop_{state.loop:03d}.md"
+
+    validation_records: list[ExperimentRecord] = []
+    if ledger is not None:
+        validation_records = [
+            item
+            for item in ledger.list_experiments(loop=state.loop)
+            if item.kind == ExperimentKind.VALIDATION
+        ]
+
+    t0_path = loaded.prompts_dir / "t0.txt"
+    t0_text = t0_path.read_text(encoding="utf-8").strip() if t0_path.is_file() else ""
     body, short_summary, main_score = build_loop_report(
         state=state,
         records=records,
@@ -708,20 +763,49 @@ def stage_f5(
         loops_root=loaded.data_root / "ledger" / "loops",
         stagnation_threshold=loaded.config.loop.stagnation_threshold,
         dnr_skipped=state.dnr_skipped,
+        validation_records=validation_records,
+        t0_text=t0_text,
+        data_root=loaded.data_root,
     )
     atomic_write_text(report_path, body)
     state.report_path = str(report_path)
-    state.summary_lines = short_summary
+    state.summary_lines = list(short_summary)
     if main_score is not None:
         state.main_score = main_score
 
-    # Informational loop report (non-blocking).
+    report_url: str | None = None
+    if uploader is not None:
+        report_url = uploader.url_for_file(
+            report_path,
+            oss_key=f"reports/loop_{state.loop:03d}.md",
+            cleanup=False,
+        )
+        state.summary_lines.append(f"report_url={report_url}")
+
+    # Informational loop report (non-blocking, multipart HTML with OSS images).
     if mail is not None and mail.enabled:
-        result = mail.send_text_detailed(
+        mail_body = body
+        if report_url and report_url.startswith("https://"):
+            # Keep T0 first; append archive URL after the T0 section.
+            mail_body = body.replace(
+                "## 本轮概览",
+                f"## 报告链接\n\n{report_url}\n\n## 本轮概览",
+                1,
+            )
+        result = mail.send_markdown(
             subject=f"[KF][loop {state.loop:03d}] Report",
-            body=body,
+            markdown_body=mail_body,
         )
         state.summary_lines.append(result.as_summary())
+        # Persist dispatch status into the archived markdown.
+        with_status = body.rstrip() + f"\n\n## 邮件发送\n\n| 字段 | 内容 |\n| --- | --- |\n| 状态 | {result.as_summary()} |\n"
+        if report_url:
+            with_status = with_status.replace(
+                "## 短摘要",
+                f"## 报告链接\n\n| 字段 | 内容 |\n| --- | --- |\n| URL | {report_url} |\n\n## 短摘要",
+                1,
+            )
+        atomic_write_text(report_path, with_status)
     elif mail is not None:
         state.summary_lines.append("mail_sent=False reason=disabled")
     return state
@@ -733,6 +817,7 @@ def stage_batch_wait(
     state: LoopState,
     memory: MemoryStore,
     store: CheckpointStore,
+    ledger: LedgerStore | None = None,
     mail: MailChannel | None = None,
 ) -> LoopState:
     if state.batch <= 0:
@@ -750,14 +835,36 @@ def stage_batch_wait(
     candidate_ids = [item.id for item in reviewable if item.status == KnowledgeStatus.CANDIDATE]
     manager.mark_pending_review(candidate_ids, loop=state.loop)
 
-    pending_items = [
-        {
-            "index": idx,
-            "knowledge_id": item.id,
-            "type": item.type.value,
-        }
-        for idx, item in enumerate(sorted(reviewable, key=lambda doc: doc.id), start=1)
-    ]
+    pending_items: list[dict[str, str]] = []
+    review_blocks: list[str] = []
+    for idx, item in enumerate(sorted(reviewable, key=lambda doc: doc.id), start=1):
+        summary = _knowledge_summary(item)
+        pending_items.append(
+            {
+                "index": str(idx),
+                "knowledge_id": item.id,
+                "type": item.type.value,
+                "summary": summary[:240],
+            }
+        )
+        block = [
+            f"{idx}. [{item.type.value}] `{item.id}`",
+            f"   {summary}",
+        ]
+        if ledger is not None and item.evidence:
+            for exp_id, original_url, result_url in _evidence_image_pairs(
+                ledger=ledger,
+                evidence_ids=list(item.evidence),
+                loop=state.loop,
+            ):
+                block.append(f"   Evidence `{exp_id}`:")
+                block.append("   | Original | Result |")
+                block.append("   | --- | --- |")
+                left = f"![original]({original_url})" if original_url and original_url.startswith("http") else (original_url or "(missing)")
+                right = f"![result]({result_url})" if result_url and result_url.startswith("http") else (result_url or "(missing)")
+                block.append(f"   | {left} | {right} |")
+        review_blocks.append("\n".join(block))
+
     batch_path = write_batch_pending_file(
         loaded.data_root,
         batch=state.batch,
@@ -770,16 +877,23 @@ def stage_batch_wait(
     if state.report_path and Path(state.report_path).is_file():
         report_text = Path(state.report_path).read_text(encoding="utf-8")
     body = (
-        f"Batch {state.batch} ended at loop {state.loop}.\n"
-        f"Pending review items: {len(pending_items)}\n\n"
+        f"# [KF][batch {state.batch:03d}] Review required\n\n"
+        f"Batch {state.batch} ended at loop {state.loop}.\n\n"
+        f"## Pending knowledge ({len(pending_items)})\n\n"
+        + ("\n\n".join(review_blocks) if review_blocks else "(none)")
+        + "\n\n## How to reply\n\n"
+        "One decision per line:\n"
+        "- `1 ok` / `1 no` / `1 hold`\n"
+        "- or `pp_0001: approve`\n"
+        "- `all ok` approves everything remaining\n"
+        "- Use `kf approve` locally if mail is unavailable.\n\n"
+        "## Latest loop report\n\n"
         f"{report_text}\n"
-        "Reply with lines like `1 ok` or `pp_0001: approve`.\n"
-        "Use `kf approve` locally if mail is unavailable.\n"
     )
     if mail is not None and mail.enabled:
-        result = mail.send_text_detailed(
+        result = mail.send_markdown(
             subject=f"[KF][batch {state.batch:03d}] pending approval",
-            body=body,
+            markdown_body=body,
         )
         state.summary_lines.append(result.as_summary())
     elif mail is not None:

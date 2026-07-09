@@ -55,7 +55,7 @@
     "username": "keeper-factory@example.com",
     "password_env": "KF_MAIL_PASSWORD",
     "from": "keeper-factory@example.com",
-    "approvers": ["you@example.com"],
+    "approvers": ["you@example.com", "wangyujie@shantong.ai"],
     "poll_interval_seconds": 300,
     "reminder_hours": 1
   },

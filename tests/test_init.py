@@ -94,3 +94,6 @@ def test_seed_demo_goldenset(tmp_path: Path) -> None:
     assert (tmp_path / "goldenset/case_001/target_card.yaml").is_file()
     assert (tmp_path / "goldenset/case_001/original.png").is_file()
     assert (tmp_path / "goldenset/anchors/anchor_v0.yaml").is_file()
+    from keeper_factory.goldenset import load_target_card
+
+    assert load_target_card(tmp_path, "case_001").demo is True

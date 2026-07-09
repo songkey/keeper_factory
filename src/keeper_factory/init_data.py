@@ -115,6 +115,7 @@ def seed_demo_goldenset(data_root: Path) -> list[Path]:
             {
                 "case_id": "case_001",
                 "category": "bad",
+                "demo": True,
                 "scene_brief": "sunset portrait by the sea",
                 "candidate_dimensions": [
                     {

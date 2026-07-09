@@ -23,6 +23,9 @@ class TargetCard(StrictModel):
     problem_note: str | None = None
     established_note: str | None = None
     trap_note: str | None = None
+    # Placeholder from `kf seed-demo`; excluded from real F.1 / F.4a pools when
+    # non-demo cases exist (avoids image-edit hallucinating on gradient stubs).
+    demo: bool = False
 
     @model_validator(mode="after")
     def validate_category_fields(self) -> Self:
