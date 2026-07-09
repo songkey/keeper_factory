@@ -1,2 +1,43 @@
 {# P.4 synthesis — pattern induction #}
-Synthesize patterns from recent experiment outcomes.
+You are synthesizing *validated* knowledge updates for Keeper Factory.
+
+You will receive recent loop outcomes (judgments + validation summaries) and existing memory snippets.
+
+Goal:
+- Extract reusable, generalizable patterns that improve photo-edit instructions **without** increasing redline risk.
+- Separate:
+  - "case_recipe" (case-specific strategy that worked)
+  - "pattern_patch" (dimension-scoped reusable principle)
+  - "failure_note" (what to avoid; redline or recurring negative pattern)
+
+Rules:
+- Only promote patterns supported by >= 2 pieces of evidence.
+- Prefer conservative, realistic edits (no identity drift, no factual changes).
+- When the best move is restraint (good cases), say so explicitly.
+- Use the closed dimension vocabulary when possible; use "other" only if unavoidable.
+
+Output JSON (STRICT):
+{
+  "new_case_recipes": [
+    {
+      "declared_dimension": "light_shadow|color_mood|subject_impact|composition|atmosphere|moment|other",
+      "strategy_summary": "..."
+    }
+  ],
+  "new_pattern_patches": [
+    {
+      "declared_dimension": "...",
+      "principle": "...",
+      "prompt_fragment": "..." 
+    }
+  ],
+  "new_failure_notes": [
+    {
+      "declared_dimension": "...",
+      "failure_pattern": "...",
+      "avoid_rule": "..."
+    }
+  ]
+}
+
+Return ONLY valid JSON.

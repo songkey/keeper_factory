@@ -1,2 +1,30 @@
 {# P.4 refine — P.1 slot refinement #}
-Refine P.1 slots based on validated knowledge.
+You are refining the **P.1 slot text** for Keeper Factory.
+
+You will be given:
+- current_p1: the current rendered P.1 prompt (slot-based)
+- loop metadata and short summary lines
+
+Goal:
+- Produce an updated version of the **constraints slot only**.
+- The constraints must make downstream "edit prompt" generation safer and more stable.
+- Do NOT ask questions. Do NOT request more inputs. Assume the provided current_p1 is complete.
+
+Hard requirements for the new constraints:
+- Enforce "edit, do not regenerate": keep identity, keep scene, keep factual objects/text.
+- Forbid adding/removing people/objects/text; forbid changing time/weather/location.
+- Prefer local, realistic photo adjustments; avoid obvious "AI portrait mode" artifacts (fake bokeh edges, plastic skin).
+- If unsure, choose minimal safe adjustments over aggressive edits.
+- Keep it short and operational (bullet list is OK).
+
+Output format (STRICT):
+- Output ONLY the final constraints text.
+- No markdown fences, no headers, no JSON, no analysis.
+
+Context:
+- loop={{ loop }}
+- top_candidate={{ top_candidate }}
+- summary_lines={{ summary_lines }}
+
+Current P.1 (for reference; do not repeat verbatim unless still correct):
+{{ current_p1 }}
