@@ -31,6 +31,7 @@ class KnowledgeDocument(StrictModel):
     id: str
     type: KnowledgeType
     status: KnowledgeStatus
+    exp_name: str | None = None
     created_loop: int
     updated_loop: int
     scope: KnowledgeScope = Field(default_factory=KnowledgeScope)

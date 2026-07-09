@@ -55,28 +55,47 @@ class LoopRuntimeStatus:
 
 
 class LoopRuntime:
-    def __init__(self, loaded: LoadedConfig, *, dry_run: bool = False) -> None:
+    def __init__(
+        self,
+        loaded: LoadedConfig,
+        *,
+        dry_run: bool = False,
+        exp_name: str | None = None,
+    ) -> None:
         self.loaded = loaded
         self.dry_run = dry_run
+        self.exp_name = (exp_name or "").strip() or None
+        if self.exp_name is None:
+            self.ledger_root = loaded.data_root / "ledger"
+            self.memory_root = loaded.data_root / "memory"
+        else:
+            self.ledger_root = loaded.data_root / "ledger" / "exp" / self.exp_name
+            self.memory_root = loaded.data_root / "memory" / "exp" / self.exp_name
+        self.ledger_root.mkdir(parents=True, exist_ok=True)
+        self.memory_root.mkdir(parents=True, exist_ok=True)
         self.store = CheckpointStore(
-            data_root=loaded.data_root,
+            ledger_root=self.ledger_root,
             config_hash=loaded.config_hash,
             prompts_hash=loaded.prompts_hash,
         )
         self.lock = CheckpointLock(self.store.lock_path)
-        self.ledger = LedgerStore(loaded.data_root)
-        self.memory = MemoryStore(loaded.data_root)
-        self.p1_chain = P1VersionChain(loaded.data_root)
-        self.loops_root = loaded.data_root / "ledger" / "loops"
+        self.ledger = LedgerStore(self.ledger_root)
+        self.memory = MemoryStore(loaded.data_root, exp_name=self.exp_name)
+        self.p1_chain = P1VersionChain(self.ledger_root)
+        self.loops_root = self.ledger_root / "loops"
         self.loops_root.mkdir(parents=True, exist_ok=True)
         self.hub = ModelHub.from_loaded(loaded, dry_run=dry_run)
         self.judge = JudgeOrchestrator.from_hub(self.hub)
-        self.uploader = ArtifactUploader(loaded, enabled=not dry_run)
+        self.uploader = ArtifactUploader(
+            loaded,
+            ledger_root=self.ledger_root,
+            enabled=not dry_run,
+        )
         self.mail = MailChannel(loaded) if not dry_run else None
 
     def run(self, loops: int | None = None) -> list[int]:
         if self.store.is_awaiting_approval():
-            batch = find_awaiting_batch(self.loaded.data_root)
+            batch = find_awaiting_batch(self.loaded.data_root, ledger_root=self.ledger_root)
             raise RuntimeError(
                 f"batch {batch} is awaiting approval; run `kf approve` before starting new loops"
             )
@@ -177,6 +196,7 @@ class LoopRuntime:
                     memory=self.memory,
                     p1_chain=self.p1_chain,
                     ledger=self.ledger,
+                    ledger_root=self.ledger_root,
                 )
             elif stage == LoopStage.F2:
                 state, f2_outputs = stage_f2(
@@ -185,6 +205,8 @@ class LoopRuntime:
                     state=state,
                     p1_chain=self.p1_chain,
                     uploader=self.uploader,
+                    ledger_root=self.ledger_root,
+                    exp_name=self.exp_name,
                 )
             elif stage == LoopStage.F3:
                 state, f3_records = stage_f3(
@@ -196,6 +218,7 @@ class LoopRuntime:
                     judge=self.judge,
                     f2_outputs=f2_outputs,
                     uploader=self.uploader,
+                    exp_name=self.exp_name,
                 )
             elif stage == LoopStage.F4A:
                 state, validation = stage_f4a(
@@ -208,6 +231,8 @@ class LoopRuntime:
                     p1_chain=self.p1_chain,
                     uploader=self.uploader,
                     dry_run=self.dry_run,
+                    ledger_root=self.ledger_root,
+                    exp_name=self.exp_name,
                 )
             elif stage == LoopStage.F4B:
                 state, synthesis = stage_f4b(
@@ -235,6 +260,8 @@ class LoopRuntime:
                     memory=self.memory,
                     uploader=self.uploader,
                     mail=self.mail,
+                    ledger_root=self.ledger_root,
+                    exp_name=self.exp_name,
                 )
             elif stage == LoopStage.BATCH_WAIT:
                 state = stage_batch_wait(
@@ -244,6 +271,8 @@ class LoopRuntime:
                     store=self.store,
                     ledger=self.ledger,
                     mail=self.mail,
+                    ledger_root=self.ledger_root,
+                    exp_name=self.exp_name,
                 )
             self._save_state(state)
 

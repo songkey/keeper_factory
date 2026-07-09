@@ -118,7 +118,7 @@ def test_compute_experiment_signature_stable() -> None:
 
 
 def test_ledger_write_and_dnr(data_root: Path) -> None:
-    store = LedgerStore(data_root)
+    store = LedgerStore(data_root / "ledger")
     completed = _sample_record(status=ExperimentStatus.COMPLETED)
     failed = _sample_record(status=ExperimentStatus.EXECUTION_FAILURE)
     failed = failed.model_copy(update={"exp_id": "loop001_main_c2", "exp_sig": "sha256:other"})
@@ -137,7 +137,7 @@ def test_ledger_write_and_dnr(data_root: Path) -> None:
 
 
 def test_ledger_rebuild_signatures(data_root: Path) -> None:
-    store = LedgerStore(data_root)
+    store = LedgerStore(data_root / "ledger")
     store.write_experiment(_sample_record())
     store.signatures_path.unlink()
     count = store.rebuild_signatures()
@@ -146,7 +146,7 @@ def test_ledger_rebuild_signatures(data_root: Path) -> None:
 
 
 def test_p1_version_chain(data_root: Path) -> None:
-    chain = P1VersionChain(data_root)
+    chain = P1VersionChain(data_root / "ledger")
     version = chain.ensure_initial()
     assert version == "p1_v001"
     assert chain.current_version() == "p1_v001"

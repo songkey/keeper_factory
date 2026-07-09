@@ -105,6 +105,8 @@ def run_validation_campaign(
     state_batch: int,
     recipe: KnowledgeDocument,
     dry_run: bool,
+    ledger_root: Path,
+    exp_name: str | None = None,
 ) -> ValidationCampaignResult:
     if not recipe.case_id or not recipe.declared_dimension:
         return ValidationCampaignResult(recipe_id=recipe.id)
@@ -125,7 +127,7 @@ def run_validation_campaign(
 
     p1_version, _, p1_hash = load_current_p1(prompts_dir=loaded.prompts_dir, p1_chain=p1_chain)
     model_labels = hub.env_model_labels()
-    out_dir = loaded.data_root / "ledger" / "experiments" / f"loop_{state_loop:03d}"
+    out_dir = ledger_root / "experiments" / f"loop_{state_loop:03d}"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     outcomes: list[ValidationOutcome] = []
@@ -166,6 +168,7 @@ def run_validation_campaign(
         Image.fromarray(result_image, mode="RGB").save(result_image_path)
         result_sha = uploader.sha256_file(result_image_path)
         original_image_url = uploader.ensure_original_url(case_id)
+        oss_scope = f"{exp_name.strip()}/" if exp_name and exp_name.strip() else ""
 
         if dry_run:
             verdict = Verdict.BETTER if card.category == CaseCategory.BAD else Verdict.SAME
@@ -226,11 +229,11 @@ def run_validation_campaign(
             judge_json_path = out_dir / f"{exp_id}_judge.json"
             judge_ref = uploader.publish_json(
                 judge_result.model_dump(mode="json", by_alias=True),
-                oss_key=f"experiments/loop_{state_loop:03d}/{exp_id}_judge.json",
+                oss_key=f"experiments/{oss_scope}loop_{state_loop:03d}/{exp_id}_judge.json",
                 local_path=judge_json_path,
             )
 
-        oss_prefix = f"experiments/loop_{state_loop:03d}/{exp_id}"
+        oss_prefix = f"experiments/{oss_scope}loop_{state_loop:03d}/{exp_id}"
         prompt_ref = uploader.publish_file(
             edit_prompt_path,
             oss_key=f"{oss_prefix}_edit_prompt.txt",

@@ -110,8 +110,9 @@ def apply_approvals(
     return applied
 
 
-def clear_batch_approval(data_root: Path, *, batch: int) -> None:
-    path = data_root / "ledger" / "batches" / f"batch_{batch:03d}.json"
+def clear_batch_approval(data_root: Path, *, batch: int, ledger_root: Path | None = None) -> None:
+    base = ledger_root or (data_root / "ledger")
+    path = base / "batches" / f"batch_{batch:03d}.json"
     if not path.is_file():
         return
     payload = json.loads(path.read_text(encoding="utf-8"))
@@ -120,8 +121,9 @@ def clear_batch_approval(data_root: Path, *, batch: int) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def find_awaiting_batch(data_root: Path) -> int | None:
-    batches_dir = data_root / "ledger" / "batches"
+def find_awaiting_batch(data_root: Path, *, ledger_root: Path | None = None) -> int | None:
+    base = ledger_root or (data_root / "ledger")
+    batches_dir = base / "batches"
     if not batches_dir.is_dir():
         return None
     for path in sorted(batches_dir.glob("batch_*.json"), reverse=True):

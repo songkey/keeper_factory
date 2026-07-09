@@ -25,9 +25,8 @@ class BudgetEntry(StrictModel):
 
 
 class LedgerStore:
-    def __init__(self, data_root: Path) -> None:
-        self.data_root = data_root
-        self.ledger_root = data_root / "ledger"
+    def __init__(self, ledger_root: Path) -> None:
+        self.ledger_root = ledger_root
         self.experiments_root = self.ledger_root / "experiments"
         self.signatures_path = self.ledger_root / "signatures.jsonl"
         self.budget_path = self.ledger_root / "budget.jsonl"

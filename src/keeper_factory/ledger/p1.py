@@ -31,8 +31,8 @@ class P1VersionRecord(StrictModel):
 class P1VersionChain:
     CURRENT_FILE = "CURRENT"
 
-    def __init__(self, data_root: Path) -> None:
-        self.root = data_root / "ledger" / "p1_versions"
+    def __init__(self, ledger_root: Path) -> None:
+        self.root = ledger_root / "p1_versions"
         self.root.mkdir(parents=True, exist_ok=True)
 
     def current_version(self) -> str | None:

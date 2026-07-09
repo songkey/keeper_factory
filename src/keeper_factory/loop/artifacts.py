@@ -22,9 +22,16 @@ class ArtifactRef:
 class ArtifactUploader:
     """Upload experiment artifacts to OSS, then drop local temp copies when safe."""
 
-    def __init__(self, loaded: LoadedConfig, *, enabled: bool = True) -> None:
+    def __init__(
+        self,
+        loaded: LoadedConfig,
+        *,
+        ledger_root: Path | None = None,
+        enabled: bool = True,
+    ) -> None:
         self.loaded = loaded
-        self.fallback_dir = loaded.data_root / "ledger" / "artifacts_pending"
+        base = ledger_root or (loaded.data_root / "ledger")
+        self.fallback_dir = base / "artifacts_pending"
         self._client: OssClient | None = None
         self._original_url_cache: dict[str, str] = {}
         if enabled and loaded.secrets is not None:

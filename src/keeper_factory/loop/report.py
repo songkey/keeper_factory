@@ -118,33 +118,55 @@ def _load_text_from_url_or_paths(url: str | None, candidates: list[Path]) -> str
 def _artifact_local_candidates(
     data_root: Path | None,
     *,
+    ledger_root: Path | None = None,
     loop: int,
     exp_id: str,
     suffix: str,
 ) -> list[Path]:
-    if data_root is None:
+    base = ledger_root
+    if base is None and data_root is not None:
+        base = data_root / "ledger"
+    if base is None:
         return []
     name = f"{exp_id}_{suffix}"
     return [
-        data_root / "ledger" / "experiments" / f"loop_{loop:03d}" / name,
-        data_root / "ledger" / "artifacts_pending" / name,
+        base / "experiments" / f"loop_{loop:03d}" / name,
+        base / "artifacts_pending" / name,
     ]
 
 
-def _load_edit_prompt(record: ExperimentRecord, data_root: Path | None) -> str | None:
+def _load_edit_prompt(
+    record: ExperimentRecord,
+    data_root: Path | None,
+    *,
+    ledger_root: Path | None = None,
+) -> str | None:
     return _load_text_from_url_or_paths(
         record.artifacts.edit_prompt_url,
         _artifact_local_candidates(
-            data_root, loop=record.loop, exp_id=record.exp_id, suffix="edit_prompt.txt"
+            data_root,
+            ledger_root=ledger_root,
+            loop=record.loop,
+            exp_id=record.exp_id,
+            suffix="edit_prompt.txt",
         ),
     )
 
 
-def _load_judge_json(record: ExperimentRecord, data_root: Path | None) -> str | None:
+def _load_judge_json(
+    record: ExperimentRecord,
+    data_root: Path | None,
+    *,
+    ledger_root: Path | None = None,
+) -> str | None:
     raw = _load_text_from_url_or_paths(
         record.judge_result_url,
         _artifact_local_candidates(
-            data_root, loop=record.loop, exp_id=record.exp_id, suffix="judge.json"
+            data_root,
+            ledger_root=ledger_root,
+            loop=record.loop,
+            exp_id=record.exp_id,
+            suffix="judge.json",
         ),
     )
     if raw is None:
@@ -328,6 +350,7 @@ def _format_experiment_section(
     *,
     strategy_summary: str | None = None,
     data_root: Path | None = None,
+    ledger_root: Path | None = None,
 ) -> list[str]:
     summary = record.judge_summary
     arts = record.artifacts
@@ -364,8 +387,8 @@ def _format_experiment_section(
             ]
         )
 
-    prompt_text = _load_edit_prompt(record, data_root)
-    judge_text = _load_judge_json(record, data_root)
+    prompt_text = _load_edit_prompt(record, data_root, ledger_root=ledger_root)
+    judge_text = _load_judge_json(record, data_root, ledger_root=ledger_root)
 
     prompt_cell = _md_link("源文件", arts.edit_prompt_url)
     if prompt_text:
@@ -431,6 +454,7 @@ def build_loop_report(
     mail_status: str | None = None,
     t0_text: str | None = None,
     data_root: Path | None = None,
+    ledger_root: Path | None = None,
     top_recipe: KnowledgeDocument | None = None,
 ) -> tuple[str, list[str], int | None]:
     candidates = _candidate_lookup(state)
@@ -589,6 +613,7 @@ def build_loop_report(
                 record,
                 strategy_summary=strategy_summary,
                 data_root=data_root,
+                ledger_root=ledger_root,
             )
         )
 
@@ -628,7 +653,7 @@ def build_loop_report(
             record = by_id.get(item.exp_id)
             if record is not None:
                 validation_sections.extend(
-                    _format_experiment_section(record, data_root=data_root)
+                    _format_experiment_section(record, data_root=data_root, ledger_root=ledger_root)
                 )
             else:
                 validation_sections.extend(

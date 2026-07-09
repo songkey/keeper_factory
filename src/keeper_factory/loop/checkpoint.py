@@ -20,21 +20,21 @@ class CheckpointLockError(RuntimeError):
 
 @dataclass(frozen=True)
 class CheckpointStore:
-    data_root: Path
+    ledger_root: Path
     config_hash: str
     prompts_hash: str
 
     @property
     def path(self) -> Path:
-        return self.data_root / "ledger" / "checkpoint.json"
+        return self.ledger_root / "checkpoint.json"
 
     @property
     def runtime_state_path(self) -> Path:
-        return self.data_root / "ledger" / "runtime_state.json"
+        return self.ledger_root / "runtime_state.json"
 
     @property
     def lock_path(self) -> Path:
-        return self.data_root / "ledger" / ".lock"
+        return self.ledger_root / ".lock"
 
     def load(self) -> Checkpoint | None:
         if not self.path.is_file():

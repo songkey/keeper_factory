@@ -205,6 +205,7 @@ def stage_f1(
     memory: MemoryStore,
     p1_chain: P1VersionChain,
     ledger: LedgerStore,
+    ledger_root: Path,
 ) -> LoopState:
     case_id, category = pick_case_for_loop(loaded.data_root, state.loop)
     card = load_target_card(loaded.data_root, case_id)
@@ -223,7 +224,7 @@ def stage_f1(
         [f"- {item.text}" for item in (*injections.failure_notes, *injections.scoped_items)]
     )
     context_lines = load_recent_loop_summaries(
-        loaded.data_root / "ledger" / "loops",
+        ledger_root / "loops",
         current_loop=state.loop,
         context_window=loaded.config.loop.context_window,
     )
@@ -334,13 +335,15 @@ def stage_f2(
     state: LoopState,
     p1_chain: P1VersionChain,
     uploader: ArtifactUploader,
+    ledger_root: Path,
+    exp_name: str | None = None,
 ) -> tuple[LoopState, list[dict[str, Any]]]:
     if not state.case_id:
         raise RuntimeError("F2 requires case_id from F1")
 
     original = load_original_image(loaded.data_root, state.case_id)
     p1_version, _, p1_hash = load_current_p1(prompts_dir=loaded.prompts_dir, p1_chain=p1_chain)
-    out_dir = loaded.data_root / "ledger" / "experiments" / f"loop_{state.loop:03d}"
+    out_dir = ledger_root / "experiments" / f"loop_{state.loop:03d}"
     out_dir.mkdir(parents=True, exist_ok=True)
     outputs: list[dict[str, Any]] = []
     state.candidate_exp_ids = []
@@ -378,7 +381,8 @@ def stage_f2(
         Image.fromarray(result_image, mode="RGB").save(result_image_path)
         result_sha = uploader.sha256_file(result_image_path)
         original_image_url = uploader.ensure_original_url(state.case_id)
-        oss_prefix = f"experiments/loop_{state.loop:03d}/{exp_id}"
+        oss_scope = f"{exp_name.strip()}/" if exp_name and exp_name.strip() else ""
+        oss_prefix = f"experiments/{oss_scope}loop_{state.loop:03d}/{exp_id}"
         prompt_ref = uploader.publish_file(
             edit_prompt_path,
             oss_key=f"{oss_prefix}_edit_prompt.txt",
@@ -417,6 +421,7 @@ def stage_f3(
     judge: JudgeOrchestrator,
     f2_outputs: list[dict[str, Any]],
     uploader: ArtifactUploader,
+    exp_name: str | None = None,
 ) -> tuple[LoopState, list[ExperimentRecord]]:
     if not state.case_id or not state.category:
         raise RuntimeError("F3 requires case_id and category from F1")
@@ -424,7 +429,7 @@ def stage_f3(
     category = CaseCategory(state.category)
     original = load_original_image(loaded.data_root, state.case_id)
     model_labels = hub.env_model_labels()
-    out_dir = loaded.data_root / "ledger" / "experiments" / f"loop_{state.loop:03d}"
+    out_dir = ledger.ledger_root / "experiments" / f"loop_{state.loop:03d}"
 
     records: list[ExperimentRecord] = []
     judge_results: dict[str, JudgeResult] = {}
@@ -479,9 +484,10 @@ def stage_f3(
 
         judge_results[output["exp_id"]] = judge_result
         judge_json_path = out_dir / f"{output['exp_id']}_judge.json"
+        oss_scope = f"{exp_name.strip()}/" if exp_name and exp_name.strip() else ""
         judge_ref = uploader.publish_json(
             judge_result.model_dump(mode="json", by_alias=True),
-            oss_key=f"experiments/loop_{state.loop:03d}/{output['exp_id']}_judge.json",
+            oss_key=f"experiments/{oss_scope}loop_{state.loop:03d}/{output['exp_id']}_judge.json",
             local_path=judge_json_path,
         )
 
@@ -551,6 +557,7 @@ def stage_f3(
             id=recipe_id,
             type=KnowledgeType.CASE_RECIPE,
             status=KnowledgeStatus.CANDIDATE,
+            exp_name=exp_name.strip() if exp_name and exp_name.strip() else None,
             created_loop=state.loop,
             updated_loop=state.loop,
             scope=KnowledgeScope(
@@ -588,6 +595,8 @@ def stage_f4a(
     p1_chain: P1VersionChain,
     uploader: ArtifactUploader,
     dry_run: bool,
+    ledger_root: Path,
+    exp_name: str | None = None,
 ) -> tuple[LoopState, ValidationCampaignResult | None]:
     recipe = select_recipe_for_validation(memory)
     if recipe is None and state.top_recipe_id:
@@ -608,6 +617,8 @@ def stage_f4a(
         state_batch=state.batch,
         recipe=recipe,
         dry_run=dry_run,
+        ledger_root=ledger_root,
+        exp_name=exp_name,
     )
     return state, campaign
 
@@ -741,8 +752,10 @@ def stage_f5(
     memory: MemoryStore | None = None,
     uploader: ArtifactUploader | None = None,
     mail: MailChannel | None = None,
+    ledger_root: Path,
+    exp_name: str | None = None,
 ) -> LoopState:
-    report_dir = loaded.data_root / "ledger" / "reports"
+    report_dir = ledger_root / "reports"
     report_dir.mkdir(parents=True, exist_ok=True)
     report_path = report_dir / f"loop_{state.loop:03d}.md"
 
@@ -765,12 +778,13 @@ def stage_f5(
         records=records,
         validation=validation,
         synthesis=synthesis,
-        loops_root=loaded.data_root / "ledger" / "loops",
+        loops_root=ledger_root / "loops",
         stagnation_threshold=loaded.config.loop.stagnation_threshold,
         dnr_skipped=state.dnr_skipped,
         validation_records=validation_records,
         t0_text=t0_text,
         data_root=loaded.data_root,
+        ledger_root=ledger_root,
         top_recipe=top_recipe,
     )
     atomic_write_text(report_path, body)
@@ -781,9 +795,10 @@ def stage_f5(
 
     report_url: str | None = None
     if uploader is not None:
+        oss_scope = f"{exp_name.strip()}/" if exp_name and exp_name.strip() else ""
         report_url = uploader.url_for_file(
             report_path,
-            oss_key=f"reports/loop_{state.loop:03d}.md",
+            oss_key=f"reports/{oss_scope}loop_{state.loop:03d}.md",
             cleanup=False,
         )
         state.summary_lines.append(f"report_url={report_url}")
@@ -825,6 +840,8 @@ def stage_batch_wait(
     store: CheckpointStore,
     ledger: LedgerStore | None = None,
     mail: MailChannel | None = None,
+    ledger_root: Path,
+    exp_name: str | None = None,
 ) -> LoopState:
     if state.batch <= 0:
         return state
@@ -876,6 +893,7 @@ def stage_batch_wait(
         batch=state.batch,
         loop_end=state.loop,
         pending_items=pending_items,
+        ledger_root=ledger_root,
     )
     store.set_awaiting_approval(batch=state.batch, loop=state.loop)
 

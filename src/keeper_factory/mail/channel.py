@@ -133,11 +133,13 @@ def loaded_has_mail_secrets(loaded: LoadedConfig) -> bool:
 def write_batch_pending_file(
     data_root: Path,
     *,
+    ledger_root: Path | None = None,
     batch: int,
     loop_end: int,
     pending_items: list[dict[str, str]],
 ) -> Path:
-    batches_dir = data_root / "ledger" / "batches"
+    base = ledger_root or (data_root / "ledger")
+    batches_dir = base / "batches"
     batches_dir.mkdir(parents=True, exist_ok=True)
     path = batches_dir / f"batch_{batch:03d}.json"
     payload = {
