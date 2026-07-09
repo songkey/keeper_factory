@@ -26,9 +26,28 @@ keeper_factory/
 uv sync --extra dev
 cp config.example.json config.json
 # 编辑 config.json：模型、OSS、邮件等；*_env 字段填写环境变量名
-export YOUR_LLM_KEY=... YOUR_OSS_AK=... YOUR_OSS_SK=... YOUR_MAIL_PASSWORD=...
+export KF_LLM_API_KEY=... KF_OSS_AK=... KF_OSS_SK=... KF_MAIL_PASSWORD=...
 
-kf init --skip-secrets   # 仅搭建 data/ 目录结构（不校验密钥）
+# 新机器部署：搭目录 + 立刻探测 env / OSS / mail
+uv run kf init
+
+# 仅搭目录、不校验密钥（本地 scaffold / dry-run）
+uv run kf init --skip-secrets
+```
+
+`kf init`（未加 `--skip-secrets`）会在脚手架完成后打印环境检查：
+
+- 环境变量是否齐全（LLM / OSS / Mail）
+- OSS DNS + 实际上传/回读探针
+- Mail DNS + 实际发一封探测邮件
+
+失败时 exit code 为 1，但 `data/` 脚手架仍会保留。可用：
+
+```bash
+uv run kf doctor                 # 只跑环境检查，不重建目录
+uv run kf init --skip-mail-send  # 不发探测邮件
+uv run kf init --skip-oss-write  # 不写 OSS 探针
+uv run kf init --skip-checks     # 跳过全部探测
 ```
 
 ### 密钥配置
@@ -47,12 +66,14 @@ kf init --skip-secrets   # 仅搭建 data/ 目录结构（不校验密钥）
 
 | 命令 | 说明 |
 |---|---|
-| `kf init` | 初始化 `data/` 目录与 nested git 仓库 |
+| `kf init` | 初始化 `data/`，并探测 env / OSS / mail |
+| `kf doctor` | 仅跑环境探测（不重建目录） |
+| `kf mail-test` / `kf oss-test` | 单独探测邮件 / OSS |
 | `kf seed-demo` | 写入 1 个 demo case + anchor，供 dry-run 使用 |
 | `kf run [--loops N] [--dry-run]` | 执行进化 loop |
 | `kf resume [--force]` | 从 checkpoint 恢复（检测 config/prompt 漂移） |
 | `kf status` | 查看当前 loop / batch / stage 状态 |
-| `kf approve` | 本地审批兜底（尚未实现） |
+| `kf approve` | 本地审批兜底 |
 
 开发中若 `kf` 未反映最新代码，可用：
 

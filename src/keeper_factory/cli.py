@@ -65,8 +65,25 @@ def init(
         "--skip-secrets",
         help="Skip environment variable resolution (scaffold only)",
     ),
+    skip_checks: bool = typer.Option(
+        False,
+        "--skip-checks",
+        help="Skip OSS/mail environment probes after scaffolding",
+    ),
+    skip_mail_send: bool = typer.Option(
+        False,
+        "--skip-mail-send",
+        help="Check mail config/DNS but do not send a probe email",
+    ),
+    skip_oss_write: bool = typer.Option(
+        False,
+        "--skip-oss-write",
+        help="Check OSS config/DNS but do not upload a probe object",
+    ),
 ) -> None:
-    """Initialize the nested data/ git repository and directory scaffold."""
+    """Initialize data/ scaffold and verify env / OSS / mail connectivity."""
+    from keeper_factory.healthcheck import run_healthchecks
+
     root = find_project_root()
     config_path = config if config.is_absolute() else root / config
 
@@ -78,10 +95,37 @@ def init(
             typer.echo(f"Config not found: {config_path}")
         raise typer.Exit(code=1)
 
-    loaded = load_config(config_path, project_root=root, resolve_secrets=not skip_secrets)
-    message = init_from_loaded(loaded)
-    typer.echo(f"Data root: {loaded.data_root}")
+    # Always scaffold first so missing secrets still leave a usable data/ tree.
+    scaffold_loaded = load_config(config_path, project_root=root, resolve_secrets=False)
+    message = init_from_loaded(scaffold_loaded)
+    typer.echo(f"Data root: {scaffold_loaded.data_root}")
     typer.echo(message)
+
+    if skip_secrets or skip_checks:
+        typer.echo("Environment checks: skipped")
+        if skip_secrets:
+            typer.echo("  (use without --skip-secrets to verify OSS/mail on this machine)")
+        return
+
+    try:
+        loaded = load_config(config_path, project_root=root, resolve_secrets=True)
+    except RuntimeError as exc:
+        typer.echo("Environment checks:")
+        typer.echo(f"  [FAIL] secrets  {exc}")
+        typer.echo("Overall: FAILED")
+        typer.echo("Init scaffold succeeded, but environment checks failed.")
+        raise typer.Exit(code=1) from exc
+
+    report = run_healthchecks(
+        loaded,
+        check_oss_write=not skip_oss_write,
+        check_mail_send=not skip_mail_send,
+    )
+    for line in report.lines():
+        typer.echo(line)
+    if not report.ok:
+        typer.echo("Init scaffold succeeded, but environment checks failed.")
+        raise typer.Exit(code=1)
 
 
 @app.command("seed-demo")
@@ -160,44 +204,63 @@ def status(
     typer.echo(f"checkpoint_exists: {snapshot.checkpoint_exists}")
 
 
+@app.command("doctor")
+def doctor(
+    config: Path = typer.Option(Path("config.json"), "--config", "-c"),
+    skip_mail_send: bool = typer.Option(False, "--skip-mail-send"),
+    skip_oss_write: bool = typer.Option(False, "--skip-oss-write"),
+) -> None:
+    """Run environment / OSS / mail probes without re-scaffolding data/."""
+    from keeper_factory.healthcheck import run_healthchecks
+
+    root = find_project_root()
+    config_path = config if config.is_absolute() else root / config
+    loaded = load_config(config_path, project_root=root)
+    report = run_healthchecks(
+        loaded,
+        check_oss_write=not skip_oss_write,
+        check_mail_send=not skip_mail_send,
+    )
+    for line in report.lines():
+        typer.echo(line)
+    if not report.ok:
+        raise typer.Exit(code=1)
+
+
 @app.command("mail-test")
 def mail_test(
     config: Path = typer.Option(Path("config.json"), "--config", "-c"),
 ) -> None:
     """Send a one-off SMTP probe to verify mail configuration."""
-    import os
-    import socket
-
-    from keeper_factory.mail import MailChannel, loaded_has_mail_secrets
+    from keeper_factory.healthcheck import CheckStatus, check_mail
 
     root = find_project_root()
     config_path = config if config.is_absolute() else root / config
     loaded = load_config(config_path, project_root=root)
-    cfg = loaded.config.mail
-    env_name = cfg.password_env
-    typer.echo(f"smtp_host: {cfg.smtp_host}:{cfg.smtp_port}")
-    typer.echo(f"username: {cfg.username}")
-    typer.echo(f"from: {cfg.from_}")
-    typer.echo(f"approvers: {', '.join(cfg.approvers)}")
-    typer.echo(f"password_env: {env_name} present={bool(os.environ.get(env_name))}")
-    typer.echo(f"enabled: {loaded_has_mail_secrets(loaded)}")
-    try:
-        infos = socket.getaddrinfo(cfg.smtp_host, cfg.smtp_port)
-        typer.echo(f"dns: ok -> {infos[0][4][0]}")
-    except OSError as exc:
-        typer.echo(f"dns: FAILED ({exc})")
-        typer.echo("Fix local DNS / network first; password is not the issue.")
-        raise typer.Exit(code=1) from exc
-
-    channel = MailChannel(loaded)
-    result = channel.send_text_detailed(
-        subject="[KF][test] mail probe",
-        body="Keeper Factory SMTP probe.\nIf you received this, mail config works.\n",
-    )
-    typer.echo(result.as_summary())
-    if not result.ok:
+    results = check_mail(loaded, probe_send=True)
+    for item in results:
+        typer.echo(f"[{item.status.value}] {item.name}: {item.detail}")
+    if any(item.status == CheckStatus.FAIL for item in results):
         raise typer.Exit(code=1)
     typer.echo("Mail probe sent.")
+
+
+@app.command("oss-test")
+def oss_test(
+    config: Path = typer.Option(Path("config.json"), "--config", "-c"),
+) -> None:
+    """Upload a tiny probe object to verify OSS write access."""
+    from keeper_factory.healthcheck import CheckStatus, check_oss
+
+    root = find_project_root()
+    config_path = config if config.is_absolute() else root / config
+    loaded = load_config(config_path, project_root=root)
+    results = check_oss(loaded, probe_write=True)
+    for item in results:
+        typer.echo(f"[{item.status.value}] {item.name}: {item.detail}")
+    if any(item.status == CheckStatus.FAIL for item in results):
+        raise typer.Exit(code=1)
+    typer.echo("OSS probe succeeded.")
 
 
 @app.command()
